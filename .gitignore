@@ -7,7 +7,6 @@ __pycache__/
 ._*
 flexcraft_params/
 sandbox.ipynb
-data/**/*.csv
-data/**/*.pdb
+data/**/*
 params/*
 .gitignore
