@@ -524,4 +524,20 @@ def number_anarci(
             print(f"No numbering found for chain {chain}!")
     return input_design
 
-
+def clean_chothia(file):
+    if isinstance(file, str):
+        file = Path(file)
+    if file.name.endswith("clean.pdb"):
+        print("File already clean")
+        return file
+    out_path = Path(file.with_suffix("").__str__()+"_clean.pdb")
+    with open(out_path, "w") as wf:
+        with open(file, "r") as rf:
+            l = "init value"
+            while l:
+                l = rf.readline()
+                if l.startswith("ATOM"):
+                    wf.write(l[:26]+" "+l[27:])
+                elif not l.startswith("HETATM"):
+                    wf.write(l)
+    return out_path
