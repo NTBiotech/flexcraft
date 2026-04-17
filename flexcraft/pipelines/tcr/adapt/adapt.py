@@ -36,7 +36,8 @@ class ADAPT:
         ab:bool = False,
         mhc_chain_index:int=0,
         tcr_chain_index:Tuple[int]|List[int]=(2,3),
-        name="AdaptTrial"
+        name="AdaptTrial",
+        out_dir:None|str|Path=None,
     ):
         # directory organization
         if not isinstance(op_dir, Path):
@@ -45,13 +46,17 @@ class ADAPT:
         self.in_dir = self.op_dir/"input_data"
         if not self.in_dir.exists():
             raise FileNotFoundError(f"Input dir {self.in_dir} does not exist!")
-        self.out_dir = self.in_dir/(now().__str__()+"AdaptTrial_0")
-        n=0
-        while self.out_dir.exists():
-            n+=1
-            self.out_dir = self.in_dir/(self.out_dir.name[:-1]+str(n))
-        print(f"Creating Output Directory at {self.out_dir}")
-        self.out_dir.mkdir()
+        if not out_dir:
+            self.out_dir = self.in_dir/(now().__str__()+"AdaptTrial_0")
+            n=0
+            while self.out_dir.exists():
+                n+=1
+                self.out_dir = self.in_dir/(self.out_dir.name[:-1]+str(n))
+            print(f"Creating Output Directory at {self.out_dir}")
+        else:
+            self.out_dir = out_dir
+        if not out_dir.exists():
+            self.out_dir.mkdir()
 
         self.ab = ab
         columns=["out_file","score","TCR","pMHC",]
