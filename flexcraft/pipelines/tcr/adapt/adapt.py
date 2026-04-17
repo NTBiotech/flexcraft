@@ -270,15 +270,16 @@ class ADAPT:
                 scaffold = Path(scaffold)
             if scaffold.parent==self.in_dir:
                 scaffold = scaffold.name
-            scaffold = PDBFile(path=self.in_dir/scaffold)
-
+            scaffold = PDBFile(path=self.in_dir/scaffold).to_data()
+        # imgt numbering
+        scaffold = number_anarci(scaffold)
         if not isinstance(pMHC, DesignData):
             # load pmhc
             if isinstance(pMHC, str):
                 pMHC = Path(pMHC)
             if pMHC.parent==self.in_dir:
                 pMHC = pMHC.name
-            pmhc = PDBFile(path=self.in_dir/scaffold)
+            pmhc = PDBFile(path=self.in_dir/scaffold).to_data()
         else:
             pmhc = pMHC
         # concatenate with split_chains
@@ -492,3 +493,31 @@ def load_data(out_dir=Path("./data/adapt/input_data"),
                 continue
             with ZipFile(out_dir/file, 'r') as zip_ref:
                 zip_ref.extractall(out_dir)
+
+def number_anarci(
+    input_design:DesignData,
+    chains:int|Tuple[int]|None=None,
+    code:str=AF2_CODE,
+    scheme:str="imgt",
+    )->DesignData:
+    '''
+    Update the residue index with standardized numbering.
+    '''
+    if chains is None:
+        chains = np.unique(input_design["chain_index"])
+    if isinstance(chains, int):
+        chains = (chains,)
+    for chain in chains:
+        mask = input_design["chain_index"] == chain
+        seq = decode(input_design["aa"], code=code)
+        numbering = anarci.number(sequence=seq, scheme=scheme)
+        if numbering:
+            numbering = [x[0][0] for x in numbering[0] if x[1]!="-"]
+            residue_index = input_design["residue_index"]
+            residue_index[mask] = numbering
+            input_design.update(residue_index=residue_index)
+        else:
+            print(f"No numbering found for chain {chain}!")
+    return input_design
+
+
