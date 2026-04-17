@@ -279,7 +279,7 @@ class ADAPT:
             scaffold = PDBFile(path=self.in_dir/scaffold).to_data()
         # imgt numbering
         scaffold = number_anarci(scaffold)
-        if pMHC is None:
+        if pMHC is None or pMHC==scaffold:
             # check if all chains in tcr
             assert len(np.unique(scaffold["chain_index"]))==(len(self.mhc_chain_index)+len(self.tcr_chain_index)+1), ValueError(f"No pMHC provided and TCR with incorrect chain number!")
         else:
