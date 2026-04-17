@@ -11,7 +11,7 @@ from colabdesign.af.alphafold.model import utils as af_utils
 
 from pathlib import Path
 from typing import List, Tuple, Optional, Dict, Iterable
-from datetime.datetime import now
+from datetime import datetime
 
 import numpy as np
 import pandas as pd
@@ -49,7 +49,7 @@ class ADAPT:
         if not self.in_dir.exists():
             raise FileNotFoundError(f"Input dir {self.in_dir} does not exist!")
         if not out_dir:
-            self.out_dir = self.in_dir/(now().__str__()+"AdaptTrial_0")
+            self.out_dir = self.in_dir/(datetime.now().__str__()+"AdaptTrial_0")
             n=0
             while self.out_dir.exists():
                 n+=1
@@ -116,7 +116,7 @@ class ADAPT:
         self.af2_model_name = af2_model_name
         self.key = key
         if af2_parameter_path is None:
-            af2_parameter_path = self.in_dir/
+            af2_parameter_path = (self.in_dir/self.af2_model_name).with_suffix(".pkl")
         self.af2_parameter_path = af2_parameter_path
         if isinstance(self.af2_parameter_path, str):
             self.af2_parameter_path = Path(self.af2_parameter_path)
@@ -292,9 +292,9 @@ class ADAPT:
             sep="\t"
             if cdr3s.endswith("csv"):
                 sep = ","
-            df = pd.read_csv(self.in_dir/cdr3s, sep=sep)
+            df = pd.read_csv(self.in_dir/cdr3s, delimiter=sep)
             cdr3a, cdr3b = df.sample(n=1).iloc[0].values
-        cdr3a, cdr3b = *cdr3s
+        cdr3a, cdr3b = cdr3s
         # insert cdr3s
         design, target_mask_a = self.insert_cdr(
             input_design=design,
@@ -467,7 +467,7 @@ def load_data(out_dir=Path("./data/adapt/input_data"),
     files = [
         "paired_human_cdr3s.tsv",
         "model_2_ptm_ft_binder_20230729.pkl",
-        "RFab_noframework-nosidechains-5-10-23_trainingparamsadded.pt",
+        #"RFab_noframework-nosidechains-5-10-23_trainingparamsadded.pt",
         "zenodo_design_models.zip"
     ],
     ):
