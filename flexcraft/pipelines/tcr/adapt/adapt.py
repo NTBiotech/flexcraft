@@ -301,15 +301,19 @@ class ADAPT:
             cdr3a, cdr3b = df.sample(n=1).iloc[0].values
         cdr3a, cdr3b = cdr3s
         # insert cdr3s
+        sequences = ({"acdr3":cdr3a},{"bcdr3":cdr3b})
+        if self.ab:
+            sequences = ({"lcdr3":cdr3a},{"hcdr3":cdr3b})
         design, target_mask_a = self.insert_cdr(
             input_design=design,
-            chain_index=2,
-            sequences={"lcdr3":cdr3a,}
+            chain_index=self.tcr_chain_index[0],
+            sequences=sequences[0]
             )
         design, target_mask_b = self.insert_cdr(
             input_design=design,
-            chain_index=2,
-            sequences={"hcdr3":cdr3b})
+            chain_index=self.tcr_chain_index[1],
+            sequences=sequences[1]
+            )
         target_mask = (target_mask_a+target_mask_b)>0
         # docking step
         design = self.docking_step(input_design=design)
@@ -498,31 +502,49 @@ def load_data(out_dir=Path("./data/adapt/input_data"),
             with ZipFile(out_dir/file, 'r') as zip_ref:
                 zip_ref.extractall(out_dir)
 
-def number_anarci(
-    input_design:DesignData,
-    chains:int|Tuple[int]|None=None,
-    code:str=AF2_CODE,
-    scheme:str="imgt",
-    )->DesignData:
-    '''
-    Update the residue index with standardized numbering.
-    '''
-    if chains is None:
-        chains = np.unique(input_design["chain_index"])
-    if isinstance(chains, int):
-        chains = (chains,)
-    for chain in chains:
-        mask = input_design["chain_index"] == chain
-        seq = decode(input_design["aa"], code=code)
-        numbering = anarci.number(sequence=seq, scheme=scheme)
-        if numbering:
-            numbering = [x[0][0] for x in numbering[0] if x[1]!="-"]
-            residue_index = input_design["residue_index"]
-            residue_index[mask] = numbering
-            input_design.update(residue_index=residue_index)
-        else:
-            print(f"No numbering found for chain {chain}!")
-    return input_design
+        def number_anarci(
+            self,
+            input_design:DesignData,
+            chains:int|Tuple[int]|None=None,
+            code:str=AF2_CODE,
+            scheme:str="imgt",
+            )->DesignData:
+            '''
+            Update the residue index with standardized numbering.
+            '''
+            if chains is None:
+                chains = np.unique(input_design["chain_index"])
+            if isinstance(chains, int):
+                chains = (chains,)
+            for chain in chains:
+                mask = input_design["chain_index"] == chain
+                seq = decode(input_design["aa"], code=code)
+                numbering = anarci.number(sequence=seq, scheme=scheme)
+                if numbering:
+                    print(f"Classified chain {chain} as {numbering[-1]}.")
+                    chain_type = numbering[-1]
+                    if chain_type == "A" and chain != self.tcr_chain_index[0]:
+                        self.tcr_chain_index[0] = chain
+                    elif chain_type == "A" and chain != self.tcr_chain_index[1]:
+                        self.tcr_chain_index[1] = chain
+                    numbering = [x[0][0] for x in numbering[0] if x[1]!="-"]
+                    residue_index = input_design["residue_index"]
+                    residue_index[mask] = numbering
+                    input_design.update(residue_index=residue_index)
+                else:
+                    print(f"No numbering found for chain {chain}!")
+            # check if chain indices correct
+            if self.tcr_chain_index[0]==self.tcr_chain_index[1]:
+                raise ValueError("TCR chains identical! Currently only 2 chain tcrs supported.")
+            if self.mhc_chain_index in self.tcr_chain_index:
+                # fix mhc chain index to longest non-tcr chain
+                chains = np.unique(input_design["chain_index"])
+                # mask out tcr chains
+                tcr_mask = ~(chains[:,None]==self.tcr_chain_index[None,:]).any(axis=1)
+                # get chain lengths
+                self.mhc_chain_index = chains[np.argmax((input_design["chain_index"][:,None] == chains[mask][None,:]).sum(axis=0))]
+            return input_design
+
 
 def clean_chothia(file):
     if isinstance(file, str):
