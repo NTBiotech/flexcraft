@@ -1,1 +1,1 @@
-from adapt import *
+from .adapt import *
