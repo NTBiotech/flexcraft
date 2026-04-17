@@ -36,8 +36,8 @@ class ADAPT:
         num_recycle:int=0,
         pmpnn_hparams:dict={},
         ab:bool = False,
-        mhc_chain_index:int=0,
-        tcr_chain_index:Tuple[int]|List[int]=(2,3),
+        mhc_chain_index:int|Tuple[int]=0,
+        tcr_chain_index:int|Tuple[int]=(2,3),
         name="AdaptTrial",
         out_dir:None|str|Path=None,
     ):
@@ -89,8 +89,13 @@ class ADAPT:
             "bcdr3":(105,117),
             }
         # chain indices
-        self.mhc_chain_index = mhc_chain_index
-        self.tcr_chain_index = tcr_chain_index
+        # pack in array for comparative operations
+        if isinstance(mhc_chain_index, int):
+            mhc_chain_index = (mhc_chain_index,)
+        self.mhc_chain_index = np.array(mhc_chain_index)
+        if isinstance(tcr_chain_index, int):
+            tcr_chain_index = (tcr_chain_index,)
+        self.tcr_chain_index = np.array(tcr_chain_index)
         # Protein MPNN TODO: add hparams
         self.pmpnn = jax.jit(make_pmpnn(pmpnn_parameter_path, eps=0.05))
         self.pmpnn_hparams = {
@@ -232,9 +237,10 @@ class ADAPT:
         Compute the mean PAE(predicted aligned error) for all (pMHC, TCR)x(TCR, pMHC) residue pairs.
         '''
         pae_matrix = af_result.result["predicted_aligned_error"]["logits"]
-        mask = (af_result.result["chain_index"][:,None] == np.array([self.mhc_chain_index, *self.tcr_chain_index])[None,:]).sum(axis=1)>0
-        mask = mask[:,None]*mask[None,:]
-        return np.where(mask, pae_matrix, 0).sum()/mask.sum()
+        #mask = (af_result.result["chain_index"][:,None] == np.concat([self.mhc_chain_index,self.tcr_chain_index])[None,:]).sum(axis=1)>0
+        #mask = mask[:,None]*mask[None,:]
+        #return np.where(mask, pae_matrix, 0).sum()/mask.sum()
+        return pae_matrix.mean()
 
     def cdr3_rmsd(
         self,
@@ -252,7 +258,7 @@ class ADAPT:
         rmsd = self.rmsd(
             x=af_result.inputs,
             y=af_result.result,
-            weight=af_result["chain_index"]==self.mhc_chain_index,
+            weight=(af_result["chain_index"][:,None]==self.mhc_chain_index[None,:]).any(axis=1),
             eval_mask=is_target,
             )
         return rmsd
@@ -275,7 +281,7 @@ class ADAPT:
         scaffold = number_anarci(scaffold)
         if pMHC is None:
             # check if all chains in tcr
-            assert len(np.unique(scaffold["chain_index"]))==4, ValueError(f"No pMHC provided and TCR with incorrect chain number!")
+            assert len(np.unique(scaffold["chain_index"]))==(len(self.mhc_chain_index)+len(self.tcr_chain_index)+1), ValueError(f"No pMHC provided and TCR with incorrect chain number!")
         else:
             if not isinstance(pMHC, DesignData):
                 # load pmhc
