@@ -235,36 +235,43 @@ class ADAPT:
         return rmsd
 
     def design_trial(
-        scaffold:str|Path,
-        pMHC:str|Path,
-        cdr3s:str|Path
+        scaffold:str|Path|DesignData,
+        pMHC:str|Path|DesignData,
+        cdr3s:str|Path|Tuple[str]
     ):
         '''Run a design step for recombination of TCRs with CDR3s'''
-        if isinstance(scaffold, str):
-            scaffold = Path(scaffold)
-        if scaffold.parent==self.in_dir:
-            scaffold = scaffold.name
-        if isinstance(pMHC, str):
-            pMHC = Path(pMHC)
-        if pMHC.parent==self.in_dir:
-            pMHC = pMHC.name
-        if isinstance(cdr3s, str):
-            cdr3s = Path(cdr3s)
-        if cdr3s.parent==self.in_dir:
-            cdr3s = cdr3s.name
         # process input
-        # load tcr
-        scaffold = PDBFile(path=self.in_dir/scaffold)
-        # load pmhc
-        pmhc = PDBFile(path=self.in_dir/scaffold)
+        if not isinstance(scaffold, DesignData):
+            # load tcr
+            if isinstance(scaffold, str):
+                scaffold = Path(scaffold)
+            if scaffold.parent==self.in_dir:
+                scaffold = scaffold.name
+            scaffold = PDBFile(path=self.in_dir/scaffold)
+
+        if not isinstance(pMHC, DesignData):
+            # load pmhc
+            if isinstance(pMHC, str):
+                pMHC = Path(pMHC)
+            if pMHC.parent==self.in_dir:
+                pMHC = pMHC.name
+            pmhc = PDBFile(path=self.in_dir/scaffold)
+        else:
+            pmhc = pMHC
         # concatenate with split_chains
         design = DesignData.concat([pmhc, scaffold])
         # load cdr3s
-        sep="\t"
-        if cdr3s.endswith("csv"):
-            sep = ","
-        df = pd.read_csv(self.in_dir/cdr3s, sep=sep)
-        cdr3a, cdr3b = df.sample(n=1).iloc[0].values
+        if not isinstance(cdr3s, tuple):
+            if isinstance(cdr3s, str):
+                cdr3s = Path(cdr3s)
+            if cdr3s.parent==self.in_dir:
+                cdr3s = cdr3s.name
+            sep="\t"
+            if cdr3s.endswith("csv"):
+                sep = ","
+            df = pd.read_csv(self.in_dir/cdr3s, sep=sep)
+            cdr3a, cdr3b = df.sample(n=1).iloc[0].values
+        cdr3a, cdr3b = *cdr3s
         # insert cdr3s
         design, target_mask_a = self.insert_cdr(
             input_design=design,
