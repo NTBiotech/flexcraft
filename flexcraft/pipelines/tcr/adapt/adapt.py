@@ -7,6 +7,7 @@ import flexcraft.sequence.aa_codes as aas
 from flexcraft.sequence.mpnn import make_pmpnn
 from flexcraft.sequence.sample import *
 
+from colabdesign.af.alphafold.model import utils as af_utils
 
 from pathlib import Path
 from typing import List, Tuple, Optional, Dict, Iterable
@@ -27,10 +28,11 @@ class ADAPT:
     '''
     def __init__(
         op_dir:Path|str,
-        af2_parameter_path:str,
         af2_model_name:str,
         key,
         pmpnn_parameter_path:str,
+        af2_parameter_path:str|Path|None=None,
+        af2_multimer:bool|None=None,
         num_recycle:int=0,
         pmpnn_hparams:dict={},
         ab:bool = False,
@@ -113,12 +115,28 @@ class ADAPT:
         # AlphaFold
         self.af2_model_name = af2_model_name
         self.key = key
+        if af2_parameter_path is None:
+            af2_parameter_path = self.in_dir/
         self.af2_parameter_path = af2_parameter_path
+        if isinstance(self.af2_parameter_path, str):
+            self.af2_parameter_path = Path(self.af2_parameter_path)
+        if self.af2_parameter_path.is_file():
+            if self.af2_parameter_path.suffix != ".pkl":
+                raise DeprecationWarning(f"AF_parameter filetype of {self.af2_parameter_path} not supported!")
+            import pickle
+            with open(self.af2_parameter_path, "rb") as rf:
+                params = pickle.load(rf)
+            self.af2_params = af_utils.flat_params_to_haiku(params=params)
+        else:
+            self.af2_params = get_model_haiku_params(
+                    model_name=model,
+                    data_dir=af2_parameter_path.__str__(), fuse=True)
+
         self.num_recycle = num_recycle
-        self.use_multimer = "multimer" in af2_model_name
-        self.af2_params = get_model_haiku_params(
-                model_name=model,
-                data_dir=af2_parameter_path, fuse=True)
+        if af2_multimer is None:
+            self.use_multimer = "multimer" in af2_model_name
+        else:
+            self.use_multimer = af2_multimer
         self.af2_config = model_config(self.model[0])
         self.af2_config.model.global_config.use_dgram = False
         self.af2_model = jax.jit(make_predict(
@@ -133,9 +151,9 @@ class ADAPT:
         if not self.use_multimer:
             num_chains = len(jnp.unique(af_input.data["chain_index"]))
             af_input_masked = af_input.block_diagonal(num_sequences=num_chains)
-            af_result: AFResult = self.af2_model(params, self.key(), af_input_masked)
+            af_result: AFResult = self.af2_model(self.af2_params, self.key(), af_input_masked)
         else:
-            af_result: AFResult = self.af2_model(params, self.key(), af_input)
+            af_result: AFResult = self.af2_model(self.af2_params, self.key(), af_input)
         return af_result
 
     def docking_step(
