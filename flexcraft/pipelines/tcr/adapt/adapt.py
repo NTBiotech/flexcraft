@@ -259,7 +259,7 @@ class ADAPT:
 
     def design_trial(
         scaffold:str|Path|DesignData,
-        pMHC:str|Path|DesignData,
+        pMHC:str|Path|DesignData|None,
         cdr3s:str|Path|Tuple[str]
     ):
         '''Run a design step for recombination of TCRs with CDR3s'''
@@ -273,17 +273,21 @@ class ADAPT:
             scaffold = PDBFile(path=self.in_dir/scaffold).to_data()
         # imgt numbering
         scaffold = number_anarci(scaffold)
-        if not isinstance(pMHC, DesignData):
-            # load pmhc
-            if isinstance(pMHC, str):
-                pMHC = Path(pMHC)
-            if pMHC.parent==self.in_dir:
-                pMHC = pMHC.name
-            pmhc = PDBFile(path=self.in_dir/scaffold).to_data()
+        if pMHC is None:
+            # check if all chains in tcr
+            assert len(np.unique(scaffold["chain_index"]))==4, ValueError(f"No pMHC provided and TCR with incorrect chain number!")
         else:
-            pmhc = pMHC
-        # concatenate with split_chains
-        design = DesignData.concat([pmhc, scaffold])
+            if not isinstance(pMHC, DesignData):
+                # load pmhc
+                if isinstance(pMHC, str):
+                    pMHC = Path(pMHC)
+                if pMHC.parent==self.in_dir:
+                    pMHC = pMHC.name
+                pmhc = PDBFile(path=self.in_dir/scaffold).to_data()
+            else:
+                pmhc = pMHC
+            # concatenate with split_chains
+            design = DesignData.concat([pmhc, scaffold], split_chains=True)
         # load cdr3s
         if not isinstance(cdr3s, tuple):
             if isinstance(cdr3s, str):
