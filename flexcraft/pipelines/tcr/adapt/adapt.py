@@ -54,7 +54,7 @@ class ADAPT:
         self.out_dir.mkdir()
 
         self.ab = ab
-        columns=["score","TCR","pMHC",]
+        columns=["out_file","score","TCR","pMHC",]
         if self.ab:
             for n in range(1,4):
                 columns.append(f"lcdr{n}")
@@ -235,11 +235,23 @@ class ADAPT:
         return rmsd
 
     def design_trial(
-        scaffold:str,
-        pMHC:str,
-        cdr3s:str
+        scaffold:str|Path,
+        pMHC:str|Path,
+        cdr3s:str|Path
     ):
         '''Run a design step for recombination of TCRs with CDR3s'''
+        if isinstance(scaffold, str):
+            scaffold = Path(scaffold)
+        if scaffold.parent==self.in_dir:
+            scaffold = scaffold.name
+        if isinstance(pMHC, str):
+            pMHC = Path(pMHC)
+        if pMHC.parent==self.in_dir:
+            pMHC = pMHC.name
+        if isinstance(cdr3s, str):
+            cdr3s = Path(cdr3s)
+        if cdr3s.parent==self.in_dir:
+            cdr3s = cdr3s.name
         # process input
         # load tcr
         scaffold = PDBFile(path=self.in_dir/scaffold)
@@ -271,38 +283,36 @@ class ADAPT:
         # redocking step
         # ranking step
         design, score = self.docking_step(input_design=design, evaluate=True)
-        self.scores.loc[len(self.scores)] = [score, scaffold, pMHC, cdr3a, cdr3b]
+        # save design as unique file name
+        file_name = f"{scaffold.split('.')[0]}_{pMHC.split('.')[0]}_0.pdb"
+        n=0
+        while (self.out_dir/file_name).exists():
+            n+=1
+            file_name = file_name.split(".")[0][:-1]+str(n)+".pdb"
+        print(f"Saving design with score {score} to file {file_name}")
+        self.scores.loc[len(self.scores)] = [file_name, score, scaffold, pMHC, cdr3a, cdr3b]
+        design.save_pdb(path=self.out_dir/file_name)
         return ranking
 
     def refine_trial(
-        n_instances:int=5,
-        n_steps:int=10,
+        self,
+        design,
         ):
-        # load candidate list
-        # start parrallel simulations
-        instances = {str(i):asyncio.create_task(n_steps) for i in n_instances}
+
+        # fetch list of candidates
         
-        asyncio.gather(instances)
-
-
-
-    async def refiner(n_steps):
-        for n in n_steps:
-            pass
-            # fetch list of candidates
-            
-            # randomly select a candidate
-            
-            # remove candidate from available list
-            
-            # mutate 2 cdr positions
-
-            # perform design step
-
-            # compare to existing
-
-            # add to pool and remove worst performing
+        # randomly select a candidate
         
+        # remove candidate from available list
+        
+        # mutate 2 cdr positions
+
+        # perform design step
+
+        # compare to existing
+
+        # add to pool and remove worst performing
+    
         pass
 
     def cdr_mask(self,
