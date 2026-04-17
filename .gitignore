@@ -10,3 +10,4 @@ sandbox.ipynb
 data/**/*
 params/*
 .gitignore
+logs/**/*

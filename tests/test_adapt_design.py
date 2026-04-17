@@ -1,0 +1,1 @@
+from flexcraft.pipelines.tcr import ADAPT
