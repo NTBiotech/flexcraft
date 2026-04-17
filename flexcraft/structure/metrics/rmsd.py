@@ -69,3 +69,47 @@ class RMSD:
             jnp.where(eval_mask > 0, ((y - x_p) ** 2).sum(axis=-1), 0).sum()
             / jnp.maximum(1, eval_mask.astype(jnp.int32).sum()))
         return result
+
+def _convert_input(x):
+    '''Helper to convert input to atom positions (jnp array).'''
+    if hasattr(x, "to_data"):
+        x = x.to_data()
+        assert isinstance(x, DesignData)
+    if isinstance(x, DesignData):
+        x = x["atom_positions"]
+    return x
+
+class LRMSD(RMSD):
+    """
+    Ligand root mean square deviation (LRMSD) metric.
+    Adapted from: Levine, S. et al., 2026. Origin-1: a generative AI platform for de novo antibody design against novel epitopes. https://doi.org/10.64898/2026.01.14.699389
+    By default, computes LRMSD for CA atoms.
+    """
+    def __call__(self,
+                 x,y,
+                 is_target:jnp.ndarray,
+                 mask=None,
+                 index = None
+                 ):
+        '''
+        Calculate the lRMSD.
+        Args:
+            x, y: atom5+ format positions, or DesignData objects.
+            is_target: jnp.ndarray[bool] of same length as x and y, specifiying the target
+            index: optional partition of the input objects into groups 
+                which should be aligned separately.
+            mask: masked positions excluded from alignment and RMSD computation.
+                Included in RMSD if eval_mask!=None.
+            
+
+        '''
+        # convert positions to jnp array
+        x = _convert_input(x)
+        y = _convert_input(y)
+        assert len(x) == len(y), ValueError("Predicted sequence has different length from template!")
+        assert len(x) == len(is_target), ValueError("is_target and x have mismatching length!")
+        # receptor excluded from RMSD
+        eval_mask = is_target
+        # ligand excluded from alignment
+        weight = ~is_target
+        return super().__call__(x, y, index, mask, eval_mask, weight)
