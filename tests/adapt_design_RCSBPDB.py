@@ -14,12 +14,12 @@ from pathlib import Path
 
 adapt = ADAPT(
     op_dir= "./data/adapt/",
-    af2_parameter_path=None,
-    af2_model_name="model_2_ptm_ft_binder_20230729",
+    af2_parameter_path="./params/af/params",
+    af2_model_name="model_2_ptm",
     key=Keygen(42),
     pmpnn_parameter_path="./params/pmpnn/v_48_030.pkl",
     af2_multimer=False,
-    num_recycle=0,
+    num_recycle=4,
     pmpnn_hparams={},
     ab=False,
     mhc_chain_index=0,
@@ -49,23 +49,8 @@ def download_structure(pdb_id: str, file_format: str = "pdb", output_dir: str = 
     out_path.write_bytes(response.content)
     return out_path
 
-def clean_chothia(file):
-    if isinstance(file, str):
-        file = Path(file)
-    out_path = Path(file.with_suffix("").__str__()+"_clean.pdb")
-    with open(out_path, "w") as wf:
-        with open(file, "r") as rf:
-            l = "init value"
-            while l:
-                l = rf.readline()
-                if l.startswith("ATOM"):
-                    wf.write(l[:26]+" "+l[27:])
-                elif not l.startswith("HETATM"):
-                    wf.write(l)
-    return out_path
-
-TCR_STRUCTURES = ["5d5q",]
-PMHC_STRUCTURES = ["5d5q",]
+TCR_STRUCTURES = ["8d5q",]
+PMHC_STRUCTURES = ["8d5q",]
 TMP_DIR = Path(os.environ["TMP"])/"test_adapt_design"
 
 for pdb_id, pmhc_id in zip(TCR_STRUCTURES, PMHC_STRUCTURES):
@@ -82,6 +67,6 @@ for pdb_id, pmhc_id in zip(TCR_STRUCTURES, PMHC_STRUCTURES):
 
     adapt.design_trial(
         scaffold=pdb_path,
-        pMHC=pmhc_path,
+        pMHC=None,
         cdr3s="paired_human_cdr3s.tsv"
     )
