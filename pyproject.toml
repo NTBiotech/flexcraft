@@ -17,6 +17,11 @@ classifiers = [
 
 ]
 
+[tool.pytest.ini_options]
+testpaths = [
+    "tests",
+]
+
 dependencies = [
     "salad @ git+https://github.com/mjendrusch/salad.git",
     "ColabDesign @ git+https://github.com/sokrypton/ColabDesign.git"
