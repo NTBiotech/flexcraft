@@ -1,13 +1,27 @@
+'''
+Codebase for running the ADAPT pipeline for TCR design
+Notes:
+    To install ANARCI for IMGT numbering, go to your project directory run:
+        """
+        conda update -n base -c conda-forge conda
+        conda install -c bioconda hmmer=3.3.2 -y
+        git clone https://github.com/oxpig/ANARCI.git
+        cd ANARCI
+        python setup.py install
+        """
+'''
 from flexcraft.data.data import DesignData
 from flexcraft.files.pdb import PDBFile
 from flexcraft.structure.af import *
 from flexcraft.structure.metrics import *
 from flexcraft.utils import Keygen, parse_options, data_from_protein
 import flexcraft.sequence.aa_codes as aas
+from flexcraft.sequence.aa_codes import AF2_CODE, decode
 from flexcraft.sequence.mpnn import make_pmpnn
 from flexcraft.sequence.sample import *
 
 from colabdesign.af.alphafold.model import utils as af_utils
+import anarci
 
 from pathlib import Path
 from typing import List, Tuple, Optional, Dict, Iterable
@@ -27,6 +41,7 @@ class ADAPT:
     https://doi.org/10.1101/2025.11.19.689381
     '''
     def __init__(
+        self,
         op_dir:Path|str,
         af2_model_name:str,
         key,
@@ -41,23 +56,30 @@ class ADAPT:
         name="AdaptTrial",
         out_dir:None|str|Path=None,
     ):
+        print("initializing")
         # directory organization
         if not isinstance(op_dir, Path):
             op_dir = Path(op_dir)
         self.op_dir = op_dir
         self.in_dir = self.op_dir/"input_data"
+        
         if not self.in_dir.exists():
             raise FileNotFoundError(f"Input dir {self.in_dir} does not exist!")
-        if not out_dir:
-            self.out_dir = self.in_dir/(datetime.now().__str__()+"AdaptTrial_0")
+        
+        if out_dir:
+            self.out_dir = out_dir
+        else:
+            self.out_dir = self.in_dir/(datetime.now().__str__()+f"{name}_0")
             n=0
             while self.out_dir.exists():
                 n+=1
                 self.out_dir = self.in_dir/(self.out_dir.name[:-1]+str(n))
+        
+        if isinstance(self.out_dir, str):
+            self.out_dir = Path(self.out_dir)
+        
+        if not self.out_dir.exists():
             print(f"Creating Output Directory at {self.out_dir}")
-        else:
-            self.out_dir = out_dir
-        if not out_dir.exists():
             self.out_dir.mkdir()
 
         self.ab = ab
@@ -117,6 +139,7 @@ class ADAPT:
         ))
 
         self.pmpnn_sampler = sample(self.pmpnn, logit_transform=center_logits())
+        
         # AlphaFold
         self.af2_model_name = af2_model_name
         self.key = key
@@ -126,12 +149,26 @@ class ADAPT:
         if isinstance(self.af2_parameter_path, str):
             self.af2_parameter_path = Path(self.af2_parameter_path)
         if self.af2_parameter_path.is_file():
+            # if params in pickle
             if self.af2_parameter_path.suffix != ".pkl":
                 raise DeprecationWarning(f"AF_parameter filetype of {self.af2_parameter_path} not supported!")
             import pickle
             with open(self.af2_parameter_path, "rb") as rf:
                 params = pickle.load(rf)
-            self.af2_params = af_utils.flat_params_to_haiku(params=params)
+            # filer param keys and adjust formatting
+            clean_params = {}
+            for k,v in params.items():
+                if not "/" in k:
+                    print(f"Skipping {k}")
+                    continue
+                if not isinstance(v, dict):
+                    print(f"{k} has no dict")
+                    continue
+                for n,i in v.items():
+                    clean_params[f"{k}//{n}"] = i
+            self.af2_params = af_utils.flat_params_to_haiku(params=clean_params)
+            # adjust model name
+            self.af2_model_name = "_".join(self.af2_model_name.split("_")[:3])
         else:
             self.af2_params = get_model_haiku_params(
                     model_name=model,
@@ -142,7 +179,7 @@ class ADAPT:
             self.use_multimer = "multimer" in af2_model_name
         else:
             self.use_multimer = af2_multimer
-        self.af2_config = model_config(self.model[0])
+        self.af2_config = model_config(self.af2_model_name)
         self.af2_config.model.global_config.use_dgram = False
         self.af2_model = jax.jit(make_predict(
             make_af2(self.af2_config, use_multimer=self.use_multimer),
@@ -264,6 +301,7 @@ class ADAPT:
         return rmsd
 
     def design_trial(
+        self,
         scaffold:str|Path|DesignData,
         pMHC:str|Path|DesignData|None,
         cdr3s:str|Path|Tuple[str]
@@ -278,7 +316,7 @@ class ADAPT:
                 scaffold = scaffold.name
             scaffold = PDBFile(path=self.in_dir/scaffold).to_data()
         # imgt numbering
-        scaffold = number_anarci(scaffold)
+        scaffold = self.number_anarci(scaffold)
         if pMHC is None or pMHC==scaffold:
             # check if all chains in tcr
             assert len(np.unique(scaffold["chain_index"]))==(len(self.mhc_chain_index)+len(self.tcr_chain_index)+1), ValueError(f"No pMHC provided and TCR with incorrect chain number!")
@@ -289,11 +327,11 @@ class ADAPT:
                     pMHC = Path(pMHC)
                 if pMHC.parent==self.in_dir:
                     pMHC = pMHC.name
-                pmhc = PDBFile(path=self.in_dir/scaffold).to_data()
+                pmhc = PDBFile(path=self.in_dir/pMHC).to_data()
             else:
                 pmhc = pMHC
             # concatenate with split_chains
-            design = DesignData.concat([pmhc, scaffold], split_chains=True)
+            design = DesignData.concatenate([pmhc, scaffold], sep_chains=True)
         # load cdr3s
         if not isinstance(cdr3s, tuple):
             if isinstance(cdr3s, str):
@@ -301,11 +339,12 @@ class ADAPT:
             if cdr3s.parent==self.in_dir:
                 cdr3s = cdr3s.name
             sep="\t"
-            if cdr3s.endswith("csv"):
+            if "csv" in cdr3s.suffix:
                 sep = ","
             df = pd.read_csv(self.in_dir/cdr3s, delimiter=sep)
             cdr3a, cdr3b = df.sample(n=1).iloc[0].values
-        cdr3a, cdr3b = cdr3s
+        else:
+            cdr3a, cdr3b = cdr3s
         # insert cdr3s
         sequences = ({"acdr3":cdr3a},{"bcdr3":cdr3b})
         if self.ab:
@@ -413,26 +452,30 @@ class ADAPT:
     def insert_cdr(self,
         input_design:DesignData,
         chain_index:int,
-        sequences:Dict[str,str|Iterable[str|int]],
+        sequences:Dict[str,str],
         ):
         '''
         Insert CDR sequences in TCR chain
         Args:
             input_design:DesignData, must contain TCR chain in "chain_index" key
             chain_index:int, chain_index value for TCR/Ab chain
-            sequences:Dict[str:str|list], mapping cdr number to sequence
+            sequences:Dict[str:str], mapping cdr number to sequence
         '''
         
         positions = [self.imgt_mapper[k] for k in sequences.keys()]
-
-        # sort by positions
-        sorter = np.argsort([s for s,_ in positions])
-        cdrs = np.array(cdrs)[sorter] # type: ignore
-        positions = np.array(positions)[sorter]
-        
         inserts = [DesignData.from_sequence(cdr).update(
             chain_index=jnp.full(len(cdr), chain_index)
             ) for cdr in sequences.values()]
+        print(inserts)
+        # sort by positions
+        sorter = np.argsort([s for s,_ in positions])
+        
+        positions = np.array(positions)[sorter]
+        sorted_inserts = []
+        for p in sorter:
+            sorted_inserts.append(inserts[p])
+        
+        inserts = sorted_inserts
         
         chain_mask = input_design["chain_index"]==chain_index
 
@@ -452,7 +495,11 @@ class ADAPT:
                     start = i
             last = current
         l.append(slice(start,-1))
-
+        print(l, inserts,)
+        print([
+            k#*[(k, v.dtype, v.shape)
+            for k in i#.data.items()
+            for i in inserts])
         out = DesignData.concatenate(
             [input_design[l[0]],
             *[
@@ -472,12 +519,58 @@ class ADAPT:
         )
 
         # update residue index
-        out = out.update(residue_index = jnp.arange(len(out["aa"])))
+        out = self.number_anarci(out, chains=chain_index)
 
         assert len(out["aa"]) == len(target_mask), "CDR mask does not have the same length as construct!"
         return out, target_mask
 
-def load_data(out_dir=Path("./data/adapt/input_data"),
+    def number_anarci(
+        self,
+        input_design:DesignData,
+        chains:int|Tuple[int]|None=None,
+        code:str=AF2_CODE,
+        scheme:str="imgt",
+        )->DesignData:
+        '''
+        Update the residue index with standardized numbering.
+        '''
+        if chains is None:
+            chains = np.unique(input_design["chain_index"])
+        if isinstance(chains, int):
+            chains = (chains,)
+        for chain in chains:
+            mask = input_design["chain_index"] == chain
+            seq = decode(input_design["aa"], code=code)
+            numbering = anarci.number(sequence=seq, scheme=scheme)
+            print(chain,numbering)
+            if numbering[0]:
+                print(f"Classified chain {chain} as {numbering[-1]}.")
+                chain_type = numbering[-1]
+                if chain_type == "A" and chain != self.tcr_chain_index[0]:
+                    self.tcr_chain_index[0] = chain
+                elif chain_type == "A" and chain != self.tcr_chain_index[1]:
+                    self.tcr_chain_index[1] = chain
+                numbering = [x[0][0] for x in numbering[0] if x[1]!="-"]
+                numbering = [int(x) if x.isnumeric() else x[:-1] for x in numbering]
+                
+                residue_index = input_design["residue_index"]
+                residue_index[mask] = numbering
+                input_design.update(residue_index=residue_index)
+            else:
+                print(f"No numbering found for chain {chain}!")
+        # check if chain indices correct
+        if self.tcr_chain_index[0]==self.tcr_chain_index[1]:
+            raise ValueError("TCR chains identical! Currently only 2 chain tcrs supported.")
+        if self.mhc_chain_index in self.tcr_chain_index:
+            # fix mhc chain index to longest non-tcr chain
+            chains = np.unique(input_design["chain_index"])
+            # mask out tcr chains
+            tcr_mask = ~(chains[:,None]==self.tcr_chain_index[None,:]).any(axis=1)
+            # get chain lengths
+            self.mhc_chain_index = chains[np.argmax((input_design["chain_index"][:,None] == chains[mask][None,:]).sum(axis=0))]
+        return input_design
+
+def load_data(out_dir:str|Path=Path("./data/adapt/input_data"),
     url = "https://zenodo.org/records/17488258/files/",
     files = [
         "paired_human_cdr3s.tsv",
@@ -488,6 +581,8 @@ def load_data(out_dir=Path("./data/adapt/input_data"),
     ):
     from urllib.request import urlretrieve
     from zipfile import ZipFile
+    if isinstance(out_dir, str):
+        out_dir = Path(out_dir)
     if not out_dir.exists():
         out_dir.mkdir()
     existing = {x.name for x in out_dir.iterdir() if x.is_file()}
@@ -508,48 +603,6 @@ def load_data(out_dir=Path("./data/adapt/input_data"),
             with ZipFile(out_dir/file, 'r') as zip_ref:
                 zip_ref.extractall(out_dir)
 
-        def number_anarci(
-            self,
-            input_design:DesignData,
-            chains:int|Tuple[int]|None=None,
-            code:str=AF2_CODE,
-            scheme:str="imgt",
-            )->DesignData:
-            '''
-            Update the residue index with standardized numbering.
-            '''
-            if chains is None:
-                chains = np.unique(input_design["chain_index"])
-            if isinstance(chains, int):
-                chains = (chains,)
-            for chain in chains:
-                mask = input_design["chain_index"] == chain
-                seq = decode(input_design["aa"], code=code)
-                numbering = anarci.number(sequence=seq, scheme=scheme)
-                if numbering:
-                    print(f"Classified chain {chain} as {numbering[-1]}.")
-                    chain_type = numbering[-1]
-                    if chain_type == "A" and chain != self.tcr_chain_index[0]:
-                        self.tcr_chain_index[0] = chain
-                    elif chain_type == "A" and chain != self.tcr_chain_index[1]:
-                        self.tcr_chain_index[1] = chain
-                    numbering = [x[0][0] for x in numbering[0] if x[1]!="-"]
-                    residue_index = input_design["residue_index"]
-                    residue_index[mask] = numbering
-                    input_design.update(residue_index=residue_index)
-                else:
-                    print(f"No numbering found for chain {chain}!")
-            # check if chain indices correct
-            if self.tcr_chain_index[0]==self.tcr_chain_index[1]:
-                raise ValueError("TCR chains identical! Currently only 2 chain tcrs supported.")
-            if self.mhc_chain_index in self.tcr_chain_index:
-                # fix mhc chain index to longest non-tcr chain
-                chains = np.unique(input_design["chain_index"])
-                # mask out tcr chains
-                tcr_mask = ~(chains[:,None]==self.tcr_chain_index[None,:]).any(axis=1)
-                # get chain lengths
-                self.mhc_chain_index = chains[np.argmax((input_design["chain_index"][:,None] == chains[mask][None,:]).sum(axis=0))]
-            return input_design
 
 
 def clean_chothia(file):
