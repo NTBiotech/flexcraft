@@ -414,7 +414,7 @@ class TestNumberAnarci:
         mock_anarci = MagicMock()
         mock_anarci.number.return_value = (fake_numbering, "H")
         with patch.object(_adapt_module, "anarci", mock_anarci):
-            result = self.adapt.number_anarci(design, chains=1)
+            result = self.adapt.number_anarci(design, chains=(1,))
         ri = np.array(result["residue_index"])[np.array(result["chain_index"]) == 1]
         np.testing.assert_array_equal(ri, fake_imgt)
 
@@ -425,7 +425,7 @@ class TestNumberAnarci:
         mock_anarci = MagicMock()
         mock_anarci.number.return_value = (False, False)
         with patch.object(_adapt_module, "anarci", mock_anarci):
-            result = self.adapt.number_anarci(design, chains=1)
+            result = self.adapt.number_anarci(design, chains=(1,))
         ri = np.array(result["residue_index"])
         np.testing.assert_array_equal(ri, original_ri)
 
@@ -441,7 +441,7 @@ class TestNumberAnarci:
         mock_anarci = MagicMock()
         mock_anarci.number.return_value = (fake_numbering, "H")
         with patch.object(_adapt_module, "anarci", mock_anarci):
-            result = self.adapt.number_anarci(design, chains=1)
+            result = self.adapt.number_anarci(design, chains=(1,))
         ri = np.array(result["residue_index"])[np.array(result["chain_index"]) == 1]
         # 111A → 111, so we expect [111, 111, 112]
         assert list(ri) == [111, 111, 112]
@@ -460,7 +460,7 @@ class TestNumberAnarci:
         mock_anarci = MagicMock()
         mock_anarci.number.return_value = (fake_numbering, "H")
         with patch.object(_adapt_module, "anarci", mock_anarci):
-            result = self.adapt.number_anarci(design, chains=1)
+            result = self.adapt.number_anarci(design, chains=(1,))
         ri = np.array(result["residue_index"])[np.array(result["chain_index"]) == 1]
         # Only non-gap positions: [1, 3]
         assert list(ri) == [1, 3]

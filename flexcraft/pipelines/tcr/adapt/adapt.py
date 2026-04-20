@@ -69,11 +69,11 @@ class ADAPT:
         if out_dir:
             self.out_dir = out_dir
         else:
-            self.out_dir = self.in_dir/(datetime.now().__str__()+f"{name}_0")
+            self.out_dir = self.op_dir/(datetime.now().strftime("%Y-%d-%b_%H:%M:%S")+f"_{name}_0")
             n=0
             while self.out_dir.exists():
                 n+=1
-                self.out_dir = self.in_dir/(self.out_dir.name[:-1]+str(n))
+                self.out_dir = self.op_dir/(self.out_dir.name[:-1]+str(n))
         
         if isinstance(self.out_dir, str):
             self.out_dir = Path(self.out_dir)
@@ -189,9 +189,11 @@ class ADAPT:
         
 
     def af_infer(self, af_input:AFInput) -> AFResult:
-        '''Wrapper for af model, handles non-multimer models.'''
+        '''
+        Wrapper for af model, handles non-multimer models.
+        '''
         if not self.use_multimer:
-            num_chains = len(jnp.unique(af_input.data["chain_index"]))
+            num_chains = len(jnp.unique(af_input.chain_index))
             af_input_masked = af_input.block_diagonal(num_sequences=num_chains)
             af_result: AFResult = self.af2_model(self.af2_params, self.key(), af_input_masked)
         else:
@@ -203,6 +205,8 @@ class ADAPT:
         input_design:DesignData,
         evaluate:bool=False,
         is_target:np.ndarray|None=None,
+        off_target_template:bool=True,
+        save_structue:bool=True,
         ) -> DesignData|Tuple[DesignData, float]:
         '''
         Predict structures of CDRs.
@@ -215,14 +219,27 @@ class ADAPT:
             Score: float, output score if evaluate
         '''
 
+        input_design = input_design.update(residue_index = np.arange(
+            len(input_design["aa"])
+        ))
         af_input = AFInput.from_data(input_design)
+
+        if off_target_template:
+            if is_target is None:
+                print("No is_target input. Not adding template!")
+            else:
+                print("template mask: ", ~is_target)
+                af_input.add_template(input_design, where=~is_target)
 
         af_result = self.af_infer(af_input=af_input)
 
         if evaluate:
-            score = self.evaluate_step(af_result=af_result, is_target=is_target)
+            score = self.evaluate_step(af_result=af_result, input_design=input_design, is_target=is_target)
+            if save_structue:
+                af_result.to_data().save_pdb(self.out_dir/"evaluated_structure.pdb")
             return af_result.to_data(), score
-
+        if save_structue:
+            af_result.to_data().save_pdb(self.out_dir/"docked_structure.pdb")
         return af_result.to_data()
 
     def design_step(self, input_design:DesignData, target_mask:np.ndarray|None):
@@ -269,10 +286,12 @@ class ADAPT:
     def evaluate_step(
         self,
         af_result:AFResult,
+        input_design: DesignData,
         is_target:np.ndarray,
         ) -> float:
         '''Calculate score for protein design.'''
-        cdr3_rmsd = self.cdr3_rmsd(af_result=af_result, is_target=is_target)
+        cdr3_rmsd = self.cdr3_rmsd(
+            af_result=af_result, input_design=input_design, is_target=is_target)
         af_pae = self.af_pae(af_result=af_result)
         return 2*af_pae+0.5*cdr3_rmsd
     
@@ -292,6 +311,7 @@ class ADAPT:
     def cdr3_rmsd(
         self,
         af_result:AFResult,
+        input_design: DesignData,
         is_target:np.ndarray,
         ) -> float:
         '''
@@ -303,9 +323,9 @@ class ADAPT:
         # only include MHC in alignment
         # only calculate rmsd for cdr3
         rmsd = self.rmsd(
-            x=af_result.inputs,
-            y=af_result.result,
-            weight=(af_result["chain_index"][:,None]==self.mhc_chain_index[None,:]).any(axis=1),
+            x=af_result,
+            y=input_design,
+            weight=(af_result.chain_index[:,None]==self.mhc_chain_index[None,:]).any(axis=1),
             eval_mask=is_target,
             )
         return rmsd
@@ -314,7 +334,8 @@ class ADAPT:
         self,
         scaffold:str|Path|DesignData,
         pMHC:str|Path|DesignData|None,
-        cdr3s:str|Path|Tuple[str]
+        cdr3s:str|Path|Tuple[str],
+        redesign_all_cdrs:bool=True,
     ):
         '''Run a design step for recombination of TCRs with CDR3s'''
         # Save original identifiers for output naming
@@ -333,6 +354,7 @@ class ADAPT:
                 scaffold = PDBFile(path=scaffold).to_data()
         # imgt numbering
         scaffold = self.number_anarci(scaffold)
+
         if pmhc_is_scaffold:
             # check if all chains are present in the single structure
             assert len(np.unique(scaffold["chain_index"])) == (len(self.mhc_chain_index) + len(self.tcr_chain_index) + 1), \
@@ -351,6 +373,7 @@ class ADAPT:
                 pmhc = pMHC
             # concatenate with split_chains
             design = DesignData.concatenate([pmhc, scaffold], sep_chains=True)
+
         # load cdr3s
         if not isinstance(cdr3s, tuple):
             if isinstance(cdr3s, str):
@@ -366,6 +389,8 @@ class ADAPT:
             cdr3a, cdr3b = cdr3s
         # insert cdr3s
         sequences = ({"acdr3": cdr3a}, {"bcdr3": cdr3b})
+        print("CDR3s: ", sequences)
+        print_dd(design, "Loaded")
         if self.ab:
             sequences = ({"lcdr3": cdr3a}, {"hcdr3": cdr3b})
         design, _ = self.insert_cdr(
@@ -378,25 +403,38 @@ class ADAPT:
             chain_index=self.tcr_chain_index[1],
             sequences=sequences[1]
             )
+        print_dd(design, "Inserted")
         # Build target mask from CDR IMGT positions on the final (renumbered) design.
         # The two insertions may change the sequence length by different amounts, so
         # masks from individual insert_cdr calls cannot be summed directly.
-        if not self.ab:
-            alpha_cdrs = [f"acdr{n}" for n in range(1, 4)]
-            beta_cdrs = [f"bcdr{n}" for n in range(1, 4)]
+        if redesign_all_cdrs:
+            if not self.ab:
+                alpha_cdrs = [f"acdr{n}" for n in range(1, 4)]
+                beta_cdrs = [f"bcdr{n}" for n in range(1, 4)]
+            else:
+                alpha_cdrs = [f"lcdr{n}" for n in range(1, 4)]
+                beta_cdrs = [f"hcdr{n}" for n in range(1, 4)]
         else:
-            alpha_cdrs = [f"lcdr{n}" for n in range(1, 4)]
-            beta_cdrs = [f"hcdr{n}" for n in range(1, 4)]
+            if not self.ab:
+                alpha_cdrs = [f"acdr3",]
+                beta_cdrs = [f"bcdr3",]
+            else:
+                alpha_cdrs = [f"lcdr3",]
+                beta_cdrs = [f"hcdr3",]
         target_mask = (
             self.cdr_mask(design, chain_index=self.tcr_chain_index[0], cdr_ids=alpha_cdrs)
             + self.cdr_mask(design, chain_index=self.tcr_chain_index[1], cdr_ids=beta_cdrs)
         ) > 0
+        print("target mask: ",target_mask)
         # docking step (structure prediction without evaluation)
-        design = self.docking_step(input_design=design)
+        design = self.docking_step(input_design=design, is_target=target_mask)
+        print_dd(design, "Docked")
         # redesign step: redesign the CDR positions
         design = self.design_step(input_design=design, target_mask=target_mask)
+        print_dd(design, "Redesigned")
         # redocking + evaluation step
         design, score = self.docking_step(input_design=design, evaluate=True, is_target=target_mask)
+        print_dd(design, "Redocked")
         # save design as unique file name
         file_name = f"{scaffold_name}_{pmhc_name}_0.pdb"
         n = 0
@@ -513,18 +551,19 @@ class ADAPT:
         inserts = [DesignData.from_sequence(cdr).update(
             chain_index=jnp.full(len(cdr), chain_index)
             ) for cdr in sequences.values()]
-
         # Sort by IMGT start position
         sorter = np.argsort([s for s, _ in positions])
         positions = np.array(positions)[sorter]
         inserts = [inserts[p] for p in sorter]
 
+        for i in inserts:
+            print_dd(i, "Insert")
         chain_mask = np.array(input_design["chain_index"]) == chain_index
         residue_index = np.array(input_design["residue_index"])
         all_cdr_positions = np.concatenate([np.arange(s, e) for s, e in positions])
         mask = (residue_index[:, None] == all_cdr_positions[None, :]).any(axis=1)
         mask = mask & chain_mask
-
+        print(f"mask: {mask}")
         # Build framework (non-CDR) segment slices — corrected off-by-one
         fw_slices = []
         in_cdr = False
@@ -538,7 +577,7 @@ class ADAPT:
                 in_cdr = False
         if not in_cdr:
             fw_slices.append(slice(fw_start, None))
-
+        print("fw_slices: ",fw_slices)
         # Assemble output DesignData: framework[0], CDR1, framework[1], CDR2, ...
         parts = [input_design[fw_slices[0]]]
         for insert, fw_slice in zip(inserts, fw_slices[1:]):
@@ -554,8 +593,9 @@ class ADAPT:
             mask_parts.append(np.zeros(len(input_design[fw_slice]["aa"])))
         target_mask = np.concatenate(mask_parts)
 
+        print_dd(out, "out")
         # Update residue index with IMGT numbering for the modified chain
-        out = self.number_anarci(out, chains=chain_index)
+        out = self.number_anarci(out, chains=(chain_index,))
 
         assert len(out["aa"]) == len(target_mask), "CDR mask does not have the same length as construct!"
         return out, target_mask
@@ -563,7 +603,7 @@ class ADAPT:
     def number_anarci(
         self,
         input_design:DesignData,
-        chains:int|Tuple[int]|None=None,
+        chains:Tuple[int]|None=None,
         code:str=AF2_CODE,
         scheme:str="imgt",
         )->DesignData:
@@ -573,14 +613,13 @@ class ADAPT:
         if chains is None:
             chains = np.unique(input_design["chain_index"])
         if isinstance(chains, int):
-            chains = (chains,)
+            chains = tuple(chains,)
         for chain in chains:
             mask = np.array(input_design["chain_index"]) == chain
             # Pass only this chain's sequence to anarci
             chain_aa = np.array(input_design["aa"])[mask]
             seq = decode(chain_aa, code=code)
             numbering = anarci.number(sequence=seq, scheme=scheme)
-            print(chain,numbering)
             if numbering[0]:
                 print(f"Classified chain {chain} as {numbering[-1]}.")
                 chain_type = numbering[-1]
@@ -593,9 +632,14 @@ class ADAPT:
                 numbering = [int(x) if x.isnumeric() else int(x[:-1]) for x in numbering]
 
                 residue_index = np.array(input_design["residue_index"])
+                if len(residue_index)>len(numbering):
+                    # extend variable region by constant region
+                    numbering += np.arange(numbering[-1]+1,numbering[-1]+1+mask.sum()-len(numbering)).tolist()
                 residue_index[mask] = numbering
                 input_design = input_design.update(residue_index=jnp.array(residue_index))
             else:
+                if chain in self.tcr_chain_index:
+                    print(seq)
                 print(f"No numbering found for chain {chain}!")
         # check if chain indices correct
         if self.tcr_chain_index[0]==self.tcr_chain_index[1]:
@@ -605,8 +649,15 @@ class ADAPT:
             chains = np.unique(input_design["chain_index"])
             # mask out tcr chains
             tcr_mask = ~(chains[:,None]==self.tcr_chain_index[None,:]).any(axis=1)
+            chains = chains[tcr_mask]
             # get chain lengths
-            self.mhc_chain_index = chains[np.argmax((input_design["chain_index"][:,None] == chains[tcr_mask][None,:]).sum(axis=0))]
+            chain_lengths =  (input_design["chain_index"][:,None] == chains[None,:]).sum(axis=0)
+            # take the n longest chain indices, where n the number of mhc chains
+            self.mhc_chain_index = np.array(
+                [chains[r]
+                for r in np.argsort(chain_lengths)[:-(len(self.mhc_chain_index)+1):-1]]
+            )
+            print(f"Classified chains {self.mhc_chain_index} as MHC chains")
         return input_design
 
 def load_data(out_dir:str|Path=Path("./data/adapt/input_data"),
@@ -643,6 +694,11 @@ def load_data(out_dir:str|Path=Path("./data/adapt/input_data"),
                 zip_ref.extractall(out_dir)
 
 
+def print_dd(dd:DesignData, name:str="", keys:list=[]):
+    print(f"---{name}---",
+        *[f"{k}: {v}\n\t shape: {v.shape}" for k,v in dd.data.items() if k in keys],
+        sep="\n"
+        )
 
 def clean_chothia(file):
     if isinstance(file, str):
