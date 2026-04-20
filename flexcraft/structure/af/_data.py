@@ -48,6 +48,10 @@ class AFInput:
     def chain_index(self):
         return self.data["asym_id"]
 
+    @property
+    def residue_index(self):
+        return self.data["residue_index"]
+
     @staticmethod
     def from_data(data: Any) -> "AFInput":
         """Convert a dictionary or DesignData object to AFInput."""

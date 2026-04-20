@@ -20,11 +20,6 @@ def _data_to_pos(x):
         assert isinstance(x, DesignData)
     if isinstance(x, DesignData):
         x = x["atom_positions"]
-    elif isinstance(x, dict):
-        if "atom_positions" in x.keys():
-            x = x["atom_positions"]
-        elif "atom14" in x.keys():
-            x = x["atom14"]
     return x
 
 @dataclass
