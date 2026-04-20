@@ -1,1 +1,1 @@
-from .adapt import *
+from flexcraft.pipelines.tcr.adapt import *
