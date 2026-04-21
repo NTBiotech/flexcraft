@@ -14,6 +14,7 @@ from flexcraft.data.data import DesignData
 from flexcraft.files.pdb import PDBFile
 from flexcraft.structure.af import *
 from flexcraft.structure.metrics import *
+from flexcraft.structure.boltz import *
 from flexcraft.utils import Keygen, parse_options, data_from_protein
 import flexcraft.sequence.aa_codes as aas
 from flexcraft.sequence.aa_codes import AF2_CODE, decode
@@ -46,15 +47,24 @@ class ADAPT:
         af2_model_name:str,
         key,
         pmpnn_parameter_path:str,
+        boltz_docking:bool=False,
+        boltz_redocking:bool=False,
+        boltz_parameter_path:Path|str=Path("./params/boltz"),
+        boltz_model_name:str="boltz2_conf",
+        boltz_num_recycle = 2,
+        boltz_num_samples = 1,
+        boltz_num_sampling_steps = 25,
+        boltz_deterministic = False,
         af2_parameter_path:str|Path|None=None,
         af2_multimer:bool|None=None,
-        num_recycle:int=0,
+        af_num_recycle:int=0,
         pmpnn_hparams:dict={},
         ab:bool = False,
         mhc_chain_index:int|Tuple[int]=0,
         tcr_chain_index:int|Tuple[int]=(2,3),
         name="AdaptTrial",
         out_dir:None|str|Path=None,
+        trim:bool=False,
     ):
         # directory organization
         if not isinstance(op_dir, Path):
@@ -81,6 +91,7 @@ class ADAPT:
             print(f"Creating Output Directory at {self.out_dir}")
             self.out_dir.mkdir()
 
+        self.trim = trim
         self.ab = ab
         columns=["out_file","score","TCR","pMHC",]
         if self.ab:
@@ -173,7 +184,7 @@ class ADAPT:
                     model_name=self.af2_model_name,
                     data_dir=af2_parameter_path.__str__(), fuse=True)
 
-        self.num_recycle = num_recycle
+        self.af_num_recycle = af_num_recycle
         if af2_multimer is None:
             self.use_multimer = "multimer" in af2_model_name
         else:
@@ -182,7 +193,28 @@ class ADAPT:
         self.af2_config.model.global_config.use_dgram = False
         self.af2_model = jax.jit(make_predict(
             make_af2(self.af2_config, use_multimer=self.use_multimer),
-            num_recycle=self.num_recycle))
+            num_recycle=self.af_num_recycle))
+
+        # Boltz2
+        self.boltz_docking = boltz_docking
+        self.boltz_redocking = boltz_redocking
+        if self.boltz_docking or self.boltz_redocking:
+            self.boltz_parameter_path = boltz_parameter_path
+            self.boltz_model_name = boltz_model_name
+            self.boltz_model = Joltz2(model=self.boltz_model_name+".ckpt", cache=self.boltz_parameter_path)
+            self.boltz_num_recycle = boltz_num_recycle
+            self.boltz_num_samples = boltz_num_samples
+            self.boltz_num_sampling_steps = boltz_num_sampling_steps
+            self.boltz_deterministic = boltz_deterministic
+            self.boltz_predictor = self.boltz_model.predictor_adhoc(
+                num_recycle=self.boltz_num_recycle,
+                num_samples=self.boltz_num_samples,
+                num_sampling_steps=self.boltz_num_sampling_steps,
+                deterministic=self.boltz_deterministic
+            )
+        else:
+            self.boltz_parameter_path = None
+            self.boltz_model_name = None
 
         self.rmsd = RMSD()
         
@@ -199,13 +231,14 @@ class ADAPT:
             af_result: AFResult = self.af2_model(self.af2_params, self.key(), af_input)
         return af_result
 
-    def docking_step(
+    def af_docking_step(
         self,
         input_design:DesignData,
         evaluate:bool=False,
         is_target:np.ndarray|None=None,
+        templates:List[DesignData]|None=None,
         off_target_template:bool=True,
-        save_structue:bool=True,
+        save_structure:bool|Path|str=True,
         ) -> DesignData|Tuple[DesignData, float]:
         '''
         Predict structures of CDRs.
@@ -215,7 +248,7 @@ class ADAPT:
             is_target:np.ndarray|None, boolean mask for CDR3 positions (required when evaluate=True)
         Returns:
             structure: DesignData, predicted structure and sequence of the input_design
-            Score: float, output score if evaluate
+            score: float, output score if evaluate
         '''
 
         input_design = input_design.update(residue_index = np.arange(
@@ -228,17 +261,87 @@ class ADAPT:
                 print("No is_target input. Not adding template!")
             else:
                 af_input = af_input.add_template(input_design, where=~is_target)
+        
+        if not templates is None:
+            for t in templates:
+                af_input = af_input.add_template(t)
 
         af_result = self.af_infer(af_input=af_input)
 
         if evaluate:
-            score = self.evaluate_step(af_result=af_result, input_design=input_design, is_target=is_target)
-            if save_structue:
-                af_result.to_data().save_pdb(self.out_dir/"evaluated_structure.pdb")
+            score = self.evaluate_step(result=af_result, input_design=input_design, is_target=is_target)
+            if save_structure:
+                if isinstance(save_structure, bool):
+                    save_structure = "evaluated_structure.pdb"
+                af_result.to_data().save_pdb(self.out_dir/save_structure)
             return af_result.to_data(), score
-        if save_structue:
-            af_result.to_data().save_pdb(self.out_dir/"docked_structure.pdb")
+        if save_structure:
+            if isinstance(save_structure, bool):
+                save_structure = "docked_structure.pdb"
+            af_result.to_data().save_pdb(self.out_dir/save_structure)
         return af_result.to_data()
+
+    def boltz_docking_step(
+        self,
+        input_design:DesignData,
+        save_structure:bool=True,
+        evaluate:bool=False,
+        is_target:np.ndarray|None=None,
+        )->List[DesignData]|Tuple[List[DesignData], float]:
+        '''
+        Predict protein structure using Boltz-2.
+        Returns:
+            structure: List[DesignData], predicted structure and sequence of the input_design for each sample in self.boltz_num_samples
+            score: float, output score if evaluate
+        '''
+        chain_masks = (input_design["chain_index"][None,:] == np.unique(input_design["chain_index"])[:, None])
+        boltz_prediction = self.boltz_predictor(
+            self.key(), 
+            *[
+                {
+                    "sequence": decode(input_design["aa"][c], AF2_CODE),
+                    "kind":"protein"
+                }
+                for c in chain_masks
+            ]
+            )
+        if save_structure:
+            for n in range(self.boltz_num_samples):
+                if isinstance(save_structure, str):
+                    save_structure = Path(save_structure)
+                if isinstance(save_structure, bool):
+                    if evaluate:
+                        save_structure = Path("boltz_evaluated_structure.pdb")
+                    else:
+                        save_structure = Path("boltz_docked_structure.pdb")
+                save_structure = f"{save_structure.with_suffix('')}_{n}.pdb"
+                boltz_prediction.save_pdb(self.out_dir/save_structure, n)
+        
+        boltz_result = boltz_prediction.result
+        print_dd(boltz_result.to_data(),"boltz_result")
+        atom24, mask24 = boltz_result.atom24_samples
+        
+        if self.boltz_num_samples>1:
+            out = [
+                DesignData(data=dict(
+                atom_positions=atom24[n],
+                atom_mask=mask24[n],
+                aa=boltz_result.restype,
+                mask=mask24[n].any(axis=1),
+                residue_index=boltz_result.residue_index,
+                chain_index=boltz_result.chain_index,
+                batch_index=jnp.zeros_like(boltz_result.residue_index),
+                plddt=boltz_result.plddt[n] if len(boltz_result.plddt.shape) == 2 else boltz_result.plddt,)
+                ).untie()
+                for n in range(self.boltz_num_samples)
+            ]
+        else:
+            out = [boltz_result.to_data(),]
+        if evaluate:
+            score = self.evaluate_step(result=boltz_result, input_design=input_design, is_target=is_target)
+            return out, score
+        
+        return out
 
     def design_step(self, input_design:DesignData, target_mask:np.ndarray|None):
         '''
@@ -283,47 +386,47 @@ class ADAPT:
 
     def evaluate_step(
         self,
-        af_result:AFResult,
+        result:AFResult|JoltzResult,
         input_design:DesignData,
         is_target:np.ndarray,
         ) -> float:
         '''Calculate score for protein design.'''
         cdr3_rmsd = self.cdr3_rmsd(
-            af_result=af_result, input_design=input_design, is_target=is_target)
-        af_ipae = self.af_ipae(af_result=af_result)
-        return 2*af_ipae+0.5*cdr3_rmsd
+            result=result, input_design=input_design, is_target=is_target)
+        ipae = self.ipae(result=result)
+        return 2*ipae+0.5*cdr3_rmsd
     
-    def af_ipae(
+    def ipae(
         self,
-        af_result:AFResult,
+        result:AFResult|JoltzResult,
     )-> float:
         '''
         Compute the mean PAE(predicted aligned error) for all (pMHC, TCR)x(TCR, pMHC) residue pairs.
         '''
-        pae_matrix = af_result.pae
+        pae_matrix = result.pae
 
-        mask = (af_result.inputs["asym_id"][:,None] == self.tcr_chain_index[None,:]).sum(axis=1)>0
+        mask = (result.chain_index[:,None] == self.tcr_chain_index[None,:]).sum(axis=1)>0
         mask = mask[:,None]!=mask[None,:]
         return (mask*pae_matrix).sum()/np.max([1,mask.sum()])
 
     def cdr3_rmsd(
         self,
-        af_result:AFResult,
+        result:AFResult|JoltzResult,
         input_design: DesignData,
         is_target:np.ndarray,
         ) -> float:
         '''
         Calculate the RMSD for CDR3 chains after alignment of mhc chain.
         Args:
-            af_result:AFResult, result of af prediction. Has inputs and result attribute.
-            is_target:np.ndarray, bool array that is True for all CDR3 positions.
+            result: AFResult|JoltzResult, result of af prediction. Has inputs and result attribute.
+            is_target: np.ndarray, bool array that is True for all CDR3 positions.
         '''
         # only include MHC in alignment
         # only calculate rmsd for cdr3
         rmsd = self.rmsd(
-            x=af_result,
+            x=result,
             y=input_design,
-            weight=(af_result.chain_index[:,None]==self.mhc_chain_index[None,:]).any(axis=1),
+            weight=(result.chain_index[:,None]==self.mhc_chain_index[None,:]).any(axis=1),
             eval_mask=is_target,
             )
         return rmsd
@@ -331,9 +434,9 @@ class ADAPT:
     def design_trial(
         self,
         scaffold:str|Path|DesignData,
-        pMHC:str|Path|DesignData|None,
         cdr3s:str|Path|Tuple[str],
-        redesign_all_cdrs:bool=True,
+        pMHC:str|Path|DesignData|None=None,
+        redesign_all_cdrs:bool=False,
     ):
         '''Run a design step for recombination of TCRs with CDR3s'''
         # Save original identifiers for output naming
@@ -351,7 +454,7 @@ class ADAPT:
             else:
                 scaffold = PDBFile(path=scaffold).to_data()
         # imgt numbering
-        scaffold = self.number_anarci(scaffold)
+        scaffold = self.number_anarci(scaffold, trim=self.trim)
 
         if pmhc_is_scaffold:
             # check if all chains are present in the single structure
@@ -424,21 +527,42 @@ class ADAPT:
             + self.cdr_mask(design, chain_index=self.tcr_chain_index[1], cdr_ids=beta_cdrs)
         ) > 0
         # docking step (structure prediction without evaluation)
-        design = self.docking_step(input_design=design, is_target=target_mask)
+        if self.boltz_docking:
+            boltz_designs = self.boltz_docking_step(input_design=design)
+            design = boltz_designs.pop()
+        else:
+            design = self.af_docking_step(input_design=design, is_target=target_mask)
         print_dd(design, "Docked")
         # redesign step: redesign the CDR positions
         design = self.design_step(input_design=design, target_mask=target_mask)
         print_dd(design, "Redesigned")
-        # redocking + evaluation step
-        design, score = self.docking_step(input_design=design, evaluate=True, is_target=target_mask)
-        print_dd(design, "Redocked")
         # save design as unique file name
         file_name = f"{scaffold_name}_{pmhc_name}_0.pdb"
         n = 0
         while (self.out_dir/file_name).exists():
             n += 1
             file_name = f"{scaffold_name}_{pmhc_name}_{n}.pdb"
-        print(f"Saving design with score {score} to file {file_name}")
+        # redocking + evaluation step
+        if self.boltz_redocking:
+            boltz_designs, score = self.boltz_docking_step(
+                input_design=design,
+                evaluate=True,
+                is_target=target_mask,
+                save_structure=file_name,
+            )
+        else:
+            templates = None
+            if self.boltz_docking:
+                templates = boltz_designs
+            design, score = self.af_docking_step(
+                input_design=design,
+                evaluate=True,
+                is_target=target_mask,
+                templates=templates,
+                save_structure=file_name,
+            )
+        print_dd(design, "Redocked")
+        print(f"Saving design with score {score} to {file_name}!")
         # Use a named Series so missing CDR1/CDR2 columns get NaN automatically
         if not self.ab:
             row = {"out_file": file_name, "score": score, "TCR": scaffold_name, "pMHC": pmhc_name,
@@ -447,12 +571,11 @@ class ADAPT:
             row = {"out_file": file_name, "score": score, "TCR": scaffold_name, "pMHC": pmhc_name,
                    "lcdr3": cdr3a, "hcdr3": cdr3b}
         self.scores.loc[len(self.scores)] = pd.Series(row)
-        design.save_pdb(path=self.out_dir/file_name)
         return score
 
     def refine_trial(
         self,
-        scaffold,
+        scaffold:DesignData|str|Path,
         ):
         # fetch list of candidates
         # process input
@@ -466,30 +589,163 @@ class ADAPT:
         # imgt numbering
         scaffold = self.number_anarci(scaffold)
         # mutate 2 cdr positions
+        scaffold = self.mutate_cdrs(
+            input_design=scaffold,
+            cdrs="random",
+            n_mutations=2,
+            )
 
-        # perform design step
+        if redesign_all_cdrs:
+            if not self.ab:
+                alpha_cdrs = [f"acdr{n}" for n in range(1, 4)]
+                beta_cdrs = [f"bcdr{n}" for n in range(1, 4)]
+            else:
+                alpha_cdrs = [f"lcdr{n}" for n in range(1, 4)]
+                beta_cdrs = [f"hcdr{n}" for n in range(1, 4)]
+        else:
+            if not self.ab:
+                alpha_cdrs = [f"acdr3",]
+                beta_cdrs = [f"bcdr3",]
+            else:
+                alpha_cdrs = [f"lcdr3",]
+                beta_cdrs = [f"hcdr3",]
+        target_mask = (
+            self.cdr_mask(design, chain_index=self.tcr_chain_index[0], cdr_ids=alpha_cdrs)
+            + self.cdr_mask(design, chain_index=self.tcr_chain_index[1], cdr_ids=beta_cdrs)
+        ) > 0
+
+        # docking step (structure prediction without evaluation)
+        if self.boltz_docking:
+            boltz_designs = self.boltz_docking_step(input_design=design)
+            design = boltz_designs.pop()
+        else:
+            design = self.af_docking_step(input_design=design, is_target=target_mask)
+        print_dd(design, "Docked")
+
+        # redesign step: redesign the CDR positions
+        design = self.design_step(input_design=design, target_mask=target_mask)
+        print_dd(design, "Redesigned")
+        # save design as unique file name
+        file_name = f"{scaffold_name}_{pmhc_name}_0.pdb"
+        n = 0
+        while (self.out_dir/file_name).exists():
+            n += 1
+            file_name = f"{scaffold_name}_{pmhc_name}_{n}.pdb"
+        # redocking + evaluation step
+        if self.boltz_redocking:
+            boltz_designs, score = self.boltz_docking_step(
+                input_design=design,
+                evaluate=True,
+                is_target=target_mask,
+                save_structure=file_name,
+            )
+        else:
+            templates = None
+            if self.boltz_docking:
+                templates = boltz_designs
+            design, score = self.af_docking_step(
+                input_design=design,
+                evaluate=True,
+                is_target=target_mask,
+                templates=templates,
+                save_structure=file_name,
+            )
+        print_dd(design, "Redocked")
+        print(f"Saving design with score {score} to {file_name}!")
+        # Use a named Series so missing CDR1/CDR2 columns get NaN automatically
+        if not self.ab:
+            row = {"out_file": file_name, "score": score, "TCR": scaffold_name, "pMHC": pmhc_name,
+                   "acdr3": cdr3a, "bcdr3": cdr3b}
+        else:
+            row = {"out_file": file_name, "score": score, "TCR": scaffold_name, "pMHC": pmhc_name,
+                   "lcdr3": cdr3a, "hcdr3": cdr3b}
 
         # compare to existing
+        self.compare(row)
 
+
+    def compare(
+        self,
+        specs:pd.Series|dict,
+        family_limit:int=10,
+    ):
+        '''
+        Compare design with previous designs. Adds specs to the scores, to then remove the worst performing design.
+        Args:
+            specs:pd.Series|dict, specs to add to self.scores
+            family_limit: int, the maximum number of designs from the same pMHC-TCR pair in the pool
+        Returns:
+            pd.Series: removed specs Series
+        '''
         # add to pool and remove worst performing
-    
-        pass
+        self.scores.loc[len(self.scores)] = specs
+        family:pd.DataFrame = self.scores.loc[df["TCR"]==specs["TCR"]&df["pMHC"]==specs["pMHC"]]
+        if len(family)>=family_limit:
+            out_name = family.sort_values("score", ascending=True).iloc[0].name
+        else:
+            out_name = self.scores.sort_values("score", ascending=True).iloc[0].name
+
+        out = self.scores.pop(out_name)
+        print(f"Removing worst design {out} and adding {specs}.")
+        file_name = out["file_name"]
+        if not isinstance(file_name, Path):
+            file_name = Path(file_name)
+        if file_name.parent != self.out_dir:
+            file_name = self.out_dir/file_name
+        file_name.unlink()
+        return out
+
 
     def mutate_cdrs(
         self,
         input_design:DesignData,
-        cdrs:List[str],
+        cdrs:List[str]|str,
         n_mutations:List[int]|int,
         mutate_all=False
         ):
-        """Function to mutate custom positions."""
+        """
+        Function to mutate custom positions.
+        Args:
+            input_design: DesignData, sequence to mutate
+            cdrs: List[str], cdr ids for mutating. Alternative modes are "all" and "random", which are equivalent to mutate_all and mutating 1 cdr per chain respectively.
+            n_muations: List[int]|int, number of mutations per cdr
+            mutate_all: bool, if True, overrides cdrs and applies n_mutations to all cdrs (if n_mutations mismatches, the mean is applied to all cdrs)
+        """
+    
+        if not self.ab:
+            alpha_cdrs = [f"acdr{n}" for n in range(1, 4)]
+            beta_cdrs = [f"bcdr{n}" for n in range(1, 4)]
+        else:
+            alpha_cdrs = [f"lcdr{n}" for n in range(1, 4)]
+            beta_cdrs = [f"hcdr{n}" for n in range(1, 4)]
+
+        if isinstance(cdrs, str):
+            if cdrs == "all":
+                mutate_all = True
+            elif cdrs == "random":
+                alpha_cdrs = np.random.choice(alpha_cdrs, 1, replace=False).tolist()
+                beta_cdrs = np.random.choice(beta_cdrs, 1, replace=False).tolist()
+                mutate_all = True
+            else:
+                cdrs = [cdrs,]
+
+        if mutate_all:
+            cdrs = alpha_cdrs+beta_cdrs
+            if not isinstance(n_mutations, int):
+                if len(n_mutations)!=len(cdrs):
+                    n_mutations = np.mean(n_mutations)
+
         if isinstance(n_mutations, int):
             n_mutations = np.full(len(cdrs),n_mutations)
+
         for cdr, n in zip(cdrs, n_mutations):
-            chain = self.tcr_chain_index[int(cdr.startswith("h") or cdr.startswith("b"))]
+            chain_index = self.tcr_chain_index[int(cdr.startswith("h") or cdr.startswith("b"))]
             positions = np.arange(*self.imgt_mapper[cdr])
+            if n > len(positions):
+                print(f"CDR has length {len(positions)} and {n} mutations have been requested. Mutating the whole CDR!")
+                n = len(positions)
             # select random positions in range
-            m_positions = np.sort(np.random.choice(positions, size=n, replace=False))
+            m_positions = np.random.choice(positions, size=n, replace=False)
             insert_mask = (positions[:,None]==m_positions[None,:]).any(axis=1)
             # create new insert
             target_mask = self.cdr_mask(
@@ -500,6 +756,17 @@ class ADAPT:
             # select new bases
             i_insert = np.random.randint(0,20, size=len(o_insert))
             i_insert = np.where(insert_mask, i_insert, o_insert)
+            input_design,_ = self.insert_cdr(
+                input_design=input_design,
+                chain_index=chain_index,
+                sequences={cdr:decode(i_insert, AF2_CODE)}
+            )
+            self.number_anarci(
+                input_design=input_design,
+                chains=[chain_index,],
+                trim=False,
+            )
+        return input_design
 
     def cdr_mask(self,
         input_design:DesignData,
@@ -646,7 +913,7 @@ class ADAPT:
                         chain_mask = np.array(input_design["chain_index"]) == chain
                         residue_index = np.array(input_design["residue_index"])
                     else:
-                        numbering += np.arange(numbering[-1]+1,numbering[-1]+1+mask.sum()-len(numbering)).tolist()
+                        numbering += np.arange(numbering[-1]+1,numbering[-1]+1+chain_mask.sum()-len(numbering)).tolist()
                 residue_index[chain_mask] = numbering
                 input_design = input_design.update(residue_index=jnp.array(residue_index))
             else:
