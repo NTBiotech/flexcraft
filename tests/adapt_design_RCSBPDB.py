@@ -14,8 +14,8 @@ from pathlib import Path
 
 adapt = ADAPT(
     op_dir= "./data/adapt/",
-    af2_parameter_path="./params/af/params",
-    af2_model_name="model_2_ptm",
+    #af2_parameter_path="./params/af/params",
+    af2_model_name="model_2_ptm_ft_binder_20230729",
     key=Keygen(42),
     pmpnn_parameter_path="./params/pmpnn/v_48_030.pkl",
     af2_multimer=False,
