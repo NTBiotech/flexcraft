@@ -229,7 +229,7 @@ class ADAPT:
                 print("No is_target input. Not adding template!")
             else:
                 print("template mask: ", ~is_target)
-                af_input.add_template(input_design, where=~is_target)
+                af_input = af_input.add_template(input_design, where=~is_target)
 
         af_result = self.af_infer(af_input=af_input)
 
