@@ -15,16 +15,19 @@ from pathlib import Path
 adapt = ADAPT(
     op_dir= "./data/adapt/",
     #af2_parameter_path="./params/af/params",
+    boltz_docking=False,
     af2_model_name="model_2_ptm_ft_binder_20230729",
     key=Keygen(42),
     pmpnn_parameter_path="./params/pmpnn/v_48_030.pkl",
     af2_multimer=False,
-    num_recycle=4,
+    af_num_recycle=0,
     pmpnn_hparams={},
     ab=False,
     mhc_chain_index=0,
     tcr_chain_index=(2,3),
     name="test_adapt_design",
+    trim=True,
+    boltz_redocking=False,
     #out_dir = Path(os.environ["TMP"])/"test_adapt_design",
 )
 
