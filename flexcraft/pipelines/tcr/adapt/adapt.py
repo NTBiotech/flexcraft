@@ -56,7 +56,6 @@ class ADAPT:
         name="AdaptTrial",
         out_dir:None|str|Path=None,
     ):
-        print("initializing")
         # directory organization
         if not isinstance(op_dir, Path):
             op_dir = Path(op_dir)
@@ -180,7 +179,6 @@ class ADAPT:
         else:
             self.use_multimer = af2_multimer
         self.af2_config = model_config(self.af2_model_name)
-        print(self.af2_config)
         self.af2_config.model.global_config.use_dgram = False
         self.af2_model = jax.jit(make_predict(
             make_af2(self.af2_config, use_multimer=self.use_multimer),
@@ -229,7 +227,6 @@ class ADAPT:
             if is_target is None:
                 print("No is_target input. Not adding template!")
             else:
-                print("template mask: ", ~is_target)
                 af_input = af_input.add_template(input_design, where=~is_target)
 
         af_result = self.af_infer(af_input=af_input)
@@ -287,7 +284,7 @@ class ADAPT:
     def evaluate_step(
         self,
         af_result:AFResult,
-        input_design: DesignData,
+        input_design:DesignData,
         is_target:np.ndarray,
         ) -> float:
         '''Calculate score for protein design.'''
@@ -303,11 +300,11 @@ class ADAPT:
         '''
         Compute the mean PAE(predicted aligned error) for all (pMHC, TCR)x(TCR, pMHC) residue pairs.
         '''
-        pae_matrix = af_result.result["predicted_aligned_error"]["logits"]
+        pae_matrix = af_result.pae
 
-        mask = (af_result.result["chain_index"][:,None] == self.tcr_chain_index[None,:]).sum(axis=1)>0
+        mask = (af_result.inputs["asym_id"][:,None] == self.tcr_chain_index[None,:]).sum(axis=1)>0
         mask = mask[:,None]!=mask[None,:]
-        return np.where(mask, pae_matrix, 0).sum()/mask.sum()
+        return (mask*pae_matrix).sum()/np.max([1,mask.sum()])
 
     def cdr3_rmsd(
         self,
@@ -426,7 +423,6 @@ class ADAPT:
             self.cdr_mask(design, chain_index=self.tcr_chain_index[0], cdr_ids=alpha_cdrs)
             + self.cdr_mask(design, chain_index=self.tcr_chain_index[1], cdr_ids=beta_cdrs)
         ) > 0
-        print("target mask: ",target_mask)
         # docking step (structure prediction without evaluation)
         design = self.docking_step(input_design=design, is_target=target_mask)
         print_dd(design, "Docked")
@@ -504,9 +500,6 @@ class ADAPT:
             # select new bases
             i_insert = np.random.randint(0,20, size=len(o_insert))
             i_insert = np.where(insert_mask, i_insert, o_insert)
-                            
-
-
 
     def cdr_mask(self,
         input_design:DesignData,
@@ -564,7 +557,6 @@ class ADAPT:
         all_cdr_positions = np.concatenate([np.arange(s, e) for s, e in positions])
         mask = (residue_index[:, None] == all_cdr_positions[None, :]).any(axis=1)
         mask = mask & chain_mask
-        print(f"mask: {mask}")
         # Build framework (non-CDR) segment slices — corrected off-by-one
         fw_slices = []
         in_cdr = False
@@ -578,7 +570,6 @@ class ADAPT:
                 in_cdr = False
         if not in_cdr:
             fw_slices.append(slice(fw_start, None))
-        print("fw_slices: ",fw_slices)
         # Assemble output DesignData: framework[0], CDR1, framework[1], CDR2, ...
         parts = [input_design[fw_slices[0]]]
         for insert, fw_slice in zip(inserts, fw_slices[1:]):
@@ -607,18 +598,27 @@ class ADAPT:
         chains:Tuple[int]|None=None,
         code:str=AF2_CODE,
         scheme:str="imgt",
+        trim:bool=False,
         )->DesignData:
         '''
-        Update the residue index with standardized numbering.
+        Update the residue index with standardized numbering. Trims recognized chains.
+        Args:
+            input_design: DesignData
+            chains: int, chain_id from chain_index to number
+            code: str, code for converting encoded amino-acids
+            scheme: str, numbering scheme
+            trim: bool, wether to trim non-numbered parts of recognized chains (i.e. constant regions)
+        Returns:
+            DesignData
         '''
         if chains is None:
             chains = np.unique(input_design["chain_index"])
         if isinstance(chains, int):
             chains = tuple(chains,)
         for chain in chains:
-            mask = np.array(input_design["chain_index"]) == chain
+            chain_mask = np.array(input_design["chain_index"]) == chain
             # Pass only this chain's sequence to anarci
-            chain_aa = np.array(input_design["aa"])[mask]
+            chain_aa = np.array(input_design["aa"])[chain_mask]
             seq = decode(chain_aa, code=code)
             numbering = anarci.number(sequence=seq, scheme=scheme)
             if numbering[0]:
@@ -633,15 +633,26 @@ class ADAPT:
                 numbering = [int(x) if x.isnumeric() else int(x[:-1]) for x in numbering]
 
                 residue_index = np.array(input_design["residue_index"])
-                if len(residue_index)>len(numbering):
+                if len(residue_index[chain_mask])>len(numbering):
                     # extend variable region by constant region
-                    numbering += np.arange(numbering[-1]+1,numbering[-1]+1+mask.sum()-len(numbering)).tolist()
-                residue_index[mask] = numbering
+                    if trim:
+                        print(f"Trimming chain {chain} to length {len(numbering)}.")
+                        index = np.arange(len(residue_index))[chain_mask]
+                        start = index[0]
+                        stop = index[-1]+1
+                        mask = np.ones(len(residue_index), dtype=np.bool_)
+                        mask[start+len(numbering):stop] = False
+                        input_design = input_design[mask]
+                        chain_mask = np.array(input_design["chain_index"]) == chain
+                        residue_index = np.array(input_design["residue_index"])
+                    else:
+                        numbering += np.arange(numbering[-1]+1,numbering[-1]+1+mask.sum()-len(numbering)).tolist()
+                residue_index[chain_mask] = numbering
                 input_design = input_design.update(residue_index=jnp.array(residue_index))
             else:
-                if chain in self.tcr_chain_index:
-                    print(seq)
                 print(f"No numbering found for chain {chain}!")
+                if chain in self.tcr_chain_index:
+                    print("Sequence: ", seq)
         # check if chain indices correct
         if self.tcr_chain_index[0]==self.tcr_chain_index[1]:
             raise ValueError("TCR chains identical! Currently only 2 chain tcrs supported.")
