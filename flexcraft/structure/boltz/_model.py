@@ -60,6 +60,7 @@ def load_boltz2(model="boltz2_conf.ckpt", cache=Path("./params/boltz/")):
             )
         ),
         pairformer_args=asdict(boltz_main.PairformerArgsV2()),
+        weights_only=False
     ).eval()
 
     model = joltz.from_torch(torch_model)
@@ -909,7 +910,7 @@ class JoltzResult(eqx.Module):
             chain_index=self.chain_index,
             batch_index=jnp.zeros_like(self.residue_index),
             plddt=self.plddt.mean(axis=0) if len(self.plddt.shape) == 2 else self.plddt,
-        ))
+        )).untie()
 
 @dataclass
 class JoltzPrediction:
