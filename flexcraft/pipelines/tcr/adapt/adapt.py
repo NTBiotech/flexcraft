@@ -166,7 +166,7 @@ class ADAPT:
                     continue
                 for n,i in v.items():
                     clean_params[f"{k}//{n}"] = i
-            self.af2_params = af_utils.flat_params_to_haiku(params=clean_params)
+            self.af2_params = af_utils.flat_params_to_haiku(params=clean_params, fuse=True)
             # adjust model name
             self.af2_model_name = "_".join(self.af2_model_name.split("_")[:3])
         else:
@@ -180,6 +180,7 @@ class ADAPT:
         else:
             self.use_multimer = af2_multimer
         self.af2_config = model_config(self.af2_model_name)
+        print(self.af2_config)
         self.af2_config.model.global_config.use_dgram = False
         self.af2_model = jax.jit(make_predict(
             make_af2(self.af2_config, use_multimer=self.use_multimer),
@@ -292,10 +293,10 @@ class ADAPT:
         '''Calculate score for protein design.'''
         cdr3_rmsd = self.cdr3_rmsd(
             af_result=af_result, input_design=input_design, is_target=is_target)
-        af_pae = self.af_pae(af_result=af_result)
-        return 2*af_pae+0.5*cdr3_rmsd
+        af_ipae = self.af_ipae(af_result=af_result)
+        return 2*af_ipae+0.5*cdr3_rmsd
     
-    def af_pae(
+    def af_ipae(
         self,
         af_result:AFResult,
     )-> float:
@@ -303,10 +304,10 @@ class ADAPT:
         Compute the mean PAE(predicted aligned error) for all (pMHC, TCR)x(TCR, pMHC) residue pairs.
         '''
         pae_matrix = af_result.result["predicted_aligned_error"]["logits"]
-        #mask = (af_result.result["chain_index"][:,None] == np.concat([self.mhc_chain_index,self.tcr_chain_index])[None,:]).sum(axis=1)>0
-        #mask = mask[:,None]*mask[None,:]
-        #return np.where(mask, pae_matrix, 0).sum()/mask.sum()
-        return pae_matrix.mean()
+
+        mask = (af_result.result["chain_index"][:,None] == self.tcr_chain_index[None,:]).sum(axis=1)>0
+        mask = mask[:,None]!=mask[None,:]
+        return np.where(mask, pae_matrix, 0).sum()/mask.sum()
 
     def cdr3_rmsd(
         self,
