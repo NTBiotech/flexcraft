@@ -15,7 +15,7 @@ from pathlib import Path
 adapt = ADAPT(
     op_dir= "./data/adapt/",
     #af2_parameter_path="./params/af/params",
-    boltz_docking=False,
+    boltz_docking=True,
     af2_model_name="model_2_ptm_ft_binder_20230729",
     key=Keygen(42),
     pmpnn_parameter_path="./params/pmpnn/v_48_030.pkl",
@@ -25,7 +25,7 @@ adapt = ADAPT(
     ab=False,
     mhc_chain_index=0,
     tcr_chain_index=(2,3),
-    name="test_adapt_design",
+    name="test_adapt_refine",
     trim=True,
     boltz_redocking=False,
     #out_dir = Path(os.environ["TMP"])/"test_adapt_design",
@@ -52,8 +52,8 @@ def download_structure(pdb_id: str, file_format: str = "pdb", output_dir: str = 
     out_path.write_bytes(response.content)
     return out_path
 
-TCR_STRUCTURES = ["8d5q",]
-PMHC_STRUCTURES = ["8d5q",]
+TCR_STRUCTURES = ["4Y1A","8d5q", "2OI9", "5VCJ"]
+PMHC_STRUCTURES = ["4Y1A","8d5q", "2OI9", "5VCJ"]
 TMP_DIR = Path(os.environ["TMP"])/"test_adapt_design"
 
 for pdb_id, pmhc_id in zip(TCR_STRUCTURES, PMHC_STRUCTURES):

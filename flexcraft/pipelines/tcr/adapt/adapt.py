@@ -72,8 +72,43 @@ class ADAPT:
         tcr_chain_index:int|Tuple[int]=(2,3),
         name="AdaptTrial",
         out_dir:None|str|Path=None,
-        trim:bool=False,
+        trim:bool=True,
+        chain_cache_len:int=650, # how long to pad for af
     ):
+        '''
+        Initialize ADAPT class for TCR design and refinement.
+        Args:
+            op_dir:Path|str, directory containing input_data subdir with TCR, pMHC and CDR files
+            key, Key object used for AF inference
+            pmpnn_sampler:Callable|None=None, ProteinMPNN sampler callable for sequence prediction.
+                If None, the model is loaded from params in the input_dir.
+            af2_model:None|JitWrapped=None, AF2 Model for structure prediction.
+                If None, the model is loaded from params in the input_dir.
+            af2_params:None|dict=None, Dictionary of AF2 parameters. 
+                If not supplied, parameters are loaded from the input_dir.
+            boltz_docking:bool=False, Wether to use Boltz-2 for the initial docking step instead of AF2.
+            boltz_redocking:bool=False, Wether to use Boltz-2 for the re-docking step instead of AF2.
+            boltz_parameter_path:Path|str=Path("./params/boltz"), path to directory containing Boltz-2 parameters.
+            boltz_model_name:str="boltz2_conf", name for Boltz-2 model for loading parameters.
+            boltz_num_recycle = 2, number of recycle steps in Boltz-2 inference.
+            boltz_num_samples = 1, number of samples generated in Boltz-2 docking.
+            boltz_num_sampling_steps = 25, number of Boltz-2 sampling steps.
+            boltz_deterministic = False, wether to load Boltz-2 in deterministic mode
+            af2_model_name:str|None=None, AF2 model name for loading config (and parameters).
+            af2_parameter_path:str|Path|None=None, path to AF2 parameter file (.npy)
+            af2_multimer:bool|None=None, wether AF2 model is multimer. If None, is infered from model name
+            af_num_recycle:int=0, number of AF2 recycle steps.
+            pmpnn_parameter_path:str|None=None, path to pMPNN parameter file (.pkl).
+            pmpnn_hparams:dict={}, pMPNN hyperparameters.
+            ab:bool = False, wether to work on Antibodies of TCRs
+            mhc_chain_index:int|Tuple[int]=0, index of MHC chains in DesignData input.
+                Is generally infered automatically
+            tcr_chain_index:int|Tuple[int]=(2,3), index
+            name="AdaptTrial",
+            out_dir:None|str|Path=None,
+            trim:bool=False,
+            chain_cache_len:int=400, # how long to pad for af
+        '''
         # directory organization
         if not isinstance(op_dir, Path):
             op_dir = Path(op_dir)
@@ -125,6 +160,7 @@ class ADAPT:
             ]]
         self.scores = pd.DataFrame(columns=columns)
 
+        self.chain_cache_len = chain_cache_len
         # chain indices
         # pack in array for comparative operations
         if isinstance(mhc_chain_index, int):
@@ -142,7 +178,6 @@ class ADAPT:
         else:
             self.pmpnn_sampler = pmpnn_sampler
 
-        
         # AlphaFold
         self.key = key
         if af2_model is None or af2_params is None:
@@ -177,6 +212,67 @@ class ADAPT:
             self.boltz_model_name = None
 
         self.rmsd = RMSD()
+    
+    def trim_design(
+        self,
+        input_design:DesignData
+        ):
+        '''Trim the length of the construct to cache length.'''
+        design_length = len(input_design["aa"])
+        if design_length<=self.chain_cache_len:
+            return input_design
+        # trim the longest mhc chain
+        chains, counts = np.unique(input_design["chain_index"], return_counts=True)
+        mhc_mask = (chains[:, None]==self.mhc_chain_index[None,:]).any(axis=1)
+        chain = chains[counts[mhc_mask].argmax()]
+        chain_length = counts[mhc_mask].max()
+        trim = design_length-self.chain_cache_len
+        chain_mask = input_design["chain_index"]==chain
+        trim_mask = np.zeros(design_length, dtype=np.bool)
+        chain_end = np.arange(len(chain_mask))[chain_mask][-1]+1
+        trim_mask[chain_end-trim:chain_end] = False
+        if chain_mask.sum()< 200:
+            print("WARNING! trimmed mhc chain to less than 200 AAs! Manual trimming may be necessary.")
+        return input_design[trim_mask]
+
+    def pad_design(
+        self,
+        input_design:DesignData,
+        *covariates,
+        ):
+        '''
+        Pad the design to conserve AF input length in order to avoid recompilation.
+        Covariates are padded with same length as input_design with zeros
+        '''
+        pad_length = self.chain_cache_len-len(input_design["aa"])
+        if pad_length==0:
+            return input_design, pad_length, covariates
+        if pad_length<0:
+            print(f"Design with length {len(input_design['aa'])} exceeds chain_cache_len {self.chain_cache_len}!\nSetting chain_cache_len to design length.")
+        print(f"Padding design by {pad_length}...")
+        atom_format = input_design["atom_mask"].shape[1]
+        input_design = DesignData.concatenate(
+            [input_design, DesignData.from_length(pad_length).update(
+                aa=jnp.full((pad_length,), 7, dtype=jnp.int32),
+                mask=jnp.zeros((pad_length,), dtype=jnp.bool_),
+                atom_positions=jnp.zeros((pad_length, atom_format, 3), dtype=jnp.float32),
+                atom_mask=jnp.zeros((pad_length, atom_format), dtype=jnp.bool_),
+                )],
+            sep_chains=False, sep_batch=False
+        )
+        if covariates:
+            covariates = [np.concatenate((c.copy(), np.zeros((pad_length,), dtype=c.dtype)), axis=0) for c in covariates]
+            return input_design, pad_length, *covariates
+        return input_design, pad_length
+    
+    def rm_pad(
+        self,
+        input_design:DesignData,
+        pad_length:int
+        ):
+        '''Remove padding from pad_design.'''
+        return input_design[:-pad_length]
+
         
     def setup_pmpnn(
         self,
@@ -291,7 +387,8 @@ class ADAPT:
             structure: DesignData, predicted structure and sequence of the input_design
             score: float, output score if evaluate
         '''
-
+        # pad to avoid recompilation
+        input_design, pad_length, is_target = self.pad_design(input_design, is_target)
         input_design = input_design.update(residue_index = np.arange(
             len(input_design["aa"])
         ))
@@ -320,7 +417,8 @@ class ADAPT:
             if isinstance(save_structure, bool):
                 save_structure = "docked_structure.pdb"
             af_result.to_data().save_pdb(self.out_dir/save_structure)
-        return af_result.to_data()
+        # remove pad
+        return self.rm_pad(af_result.to_data(), pad_length)
 
     def boltz_docking_step(
         self,
@@ -335,6 +433,7 @@ class ADAPT:
             structure: List[DesignData], predicted structure and sequence of the input_design for each sample in self.boltz_num_samples
             score: float, output score if evaluate
         '''
+        input_design, pad_length = self.pad_design(input_design=input_design)
         chain_masks = (input_design["chain_index"][None,:] == np.unique(input_design["chain_index"])[:, None])
         boltz_prediction = self.boltz_predictor(
             self.key(), 
@@ -364,20 +463,22 @@ class ADAPT:
         
         if self.boltz_num_samples>1:
             out = [
-                DesignData(data=dict(
-                atom_positions=atom24[n],
-                atom_mask=mask24,
-                aa=boltz_result.restype,
-                mask=mask24.any(axis=1),
-                residue_index=boltz_result.residue_index,
-                chain_index=boltz_result.chain_index,
-                batch_index=jnp.zeros_like(boltz_result.residue_index),
-                plddt=boltz_result.plddt[n] if len(boltz_result.plddt.shape) == 2 else boltz_result.plddt,)
-                ).untie()
+                self.rm_pad(
+                    DesignData(data=dict(
+                    atom_positions=atom24[n],
+                    atom_mask=mask24,
+                    aa=boltz_result.restype,
+                    mask=mask24.any(axis=1),
+                    residue_index=boltz_result.residue_index,
+                    chain_index=boltz_result.chain_index,
+                    batch_index=jnp.zeros_like(boltz_result.residue_index),
+                    plddt=boltz_result.plddt[n] if len(boltz_result.plddt.shape) == 2 else boltz_result.plddt,)
+                    ).untie(),
+                    pad_length,)
                 for n in range(self.boltz_num_samples)
             ]
         else:
-            out = [boltz_result.to_data(),]
+            out = [self.rm_pad(boltz_result.to_data(), pad_length),]
         if evaluate:
             score = self.evaluate_step(result=boltz_result, input_design=input_design, is_target=is_target)
             return out, score
@@ -391,6 +492,7 @@ class ADAPT:
             input_design: DesignData, containing predicted structure
             target_mask: np.ndarray|None, if None, all cdrs are redesigned
         '''
+        input_design, pad_length, target_mask = self.pad_design(input_design, target_mask)
         if target_mask is None:
             # mask all cdrs: use canonical CDR names by chain
             if not self.ab:
@@ -423,7 +525,7 @@ class ADAPT:
         pmpnn_result, _ = self.pmpnn_sampler(self.key(), input_design)
         pmpnn_result = input_design.update(
             aa=aas.translate(pmpnn_result["aa"], aas.PMPNN_CODE, aas.AF2_CODE))
-        return pmpnn_result
+        return self.rm_pad(pmpnn_result, pad_length)
 
     def evaluate_step(
         self,
@@ -520,7 +622,8 @@ class ADAPT:
         
         # imgt numbering
         design = self.number_anarci(design, trim=self.trim)
-
+        if self.trim:
+            design = self.trim_design(design)
         sequences = ({},{})
         # load cdr
         for k,v in cdrs.items():
@@ -542,7 +645,7 @@ class ADAPT:
         print_dd(design, "Inserted")
 
         if redesign_all_cdrs:
-            pre = ["h","b"][int(self.ab)]
+            pre = ["b","h"][int(self.ab)]
             alpha_cdrs = [k for k in self.imgt_mapper.keys() if not k.startswith(pre)]
             beta_cdrs = [k for k in self.imgt_mapper.keys() if k.startswith(pre)]
         else:
@@ -609,13 +712,13 @@ class ADAPT:
         redesign_all_cdrs:bool=False,
         ):
         if cdrs is None:
-            cdrs = ["acdr3", "bcdr3"] if self.ab else ["lcdr3", "hcdr3"]
+            cdrs = ["lcdr3", "hcdr3"] if self.ab else ["acdr3", "bcdr3"]
 
         # filter ids
         for cdr in cdrs:
             if cdr not in self.imgt_mapper.keys():
                 raise KeyError(f"Invalid cdr id {cdr}! Choose one of {[f'{k}, ' for k in self.imgt_mapper.keys()]} or change self.ab.")
-
+        print(f"CDRs: {cdrs}")
 
         # fetch list of candidates
         # process input
@@ -637,13 +740,15 @@ class ADAPT:
             )
 
         if redesign_all_cdrs:
-            pre = ["h","b"][int(self.ab)]
+            pre = ["b","h"][int(self.ab)]
             alpha_cdrs = [k for k in self.imgt_mapper.keys() if not k.startswith(pre)]
             beta_cdrs = [k for k in self.imgt_mapper.keys() if k.startswith(pre)]
         else:
-            pre = ["h","b"][int(self.ab)]
+            pre = ["b","h"][int(self.ab)]
             alpha_cdrs = [cdr for cdr in cdrs if not cdr.startswith(pre)]
+            print(alpha_cdrs)
             beta_cdrs = [cdr for cdr in cdrs if cdr.startswith(pre)]
+            print(beta_cdrs)
         target_mask = (
             self.cdr_mask(scaffold, chain_index=self.tcr_chain_index[0], cdr_ids=alpha_cdrs)
             + self.cdr_mask(scaffold, chain_index=self.tcr_chain_index[1], cdr_ids=beta_cdrs)
@@ -749,7 +854,7 @@ class ADAPT:
             (DesignData, dict): the input design with mutated cdrs and a dict with the mutated cdrs
         """
         out_cdrs = {}
-        pre = ["h","b"][int(self.ab)]
+        pre = ["b","h"][int(self.ab)]
         alpha_cdrs = [k for k in self.imgt_mapper.keys() if not k.startswith(pre)]
         beta_cdrs = [k for k in self.imgt_mapper.keys() if k.startswith(pre)]
 
@@ -985,7 +1090,7 @@ class ADAPT:
         # check if chain indices correct
         if self.tcr_chain_index[0]==self.tcr_chain_index[1]:
             raise ValueError("TCR chains identical! Currently only 2 chain tcrs supported.")
-        if self.mhc_chain_index in self.tcr_chain_index:
+        if (self.mhc_chain_index[:,None] == self.tcr_chain_index[None,:]).any(axis=1):
             # fix mhc chain index to longest non-tcr chain
             chains = np.unique(input_design["chain_index"])
             # mask out tcr chains
@@ -993,10 +1098,10 @@ class ADAPT:
             chains = chains[tcr_mask]
             # get chain lengths
             chain_lengths =  (input_design["chain_index"][:,None] == chains[None,:]).sum(axis=0)
-            # take the n longest chain indices, where n the number of mhc chains
+            # take the n longest chain indices, where n the number of non-tcr chains -1 (for the peptide chain) 
             self.mhc_chain_index = np.array(
                 [chains[r]
-                for r in np.argsort(chain_lengths)[:-(len(self.mhc_chain_index)+1):-1]]
+                for r in np.argsort(chain_lengths)[:-(len(chains)):-1]]
             )
             print(f"Classified chains {self.mhc_chain_index} as MHC chains")
         return input_design
@@ -1042,12 +1147,14 @@ def print_dd(dd:DesignData, name:str="", keys:list=[]):
         )
 
 def clean_chothia(file):
+    '''Removes annotations, duplicate chains and HETATMs.'''
     if isinstance(file, str):
         file = Path(file)
     if file.name.endswith("clean.pdb"):
         print("File already clean")
         return file
     out_path = Path(file.with_suffix("").__str__()+"_clean.pdb")
+    doubled_chains = []
     with open(out_path, "w") as wf:
         with open(file, "r") as rf:
             l = "init value"
