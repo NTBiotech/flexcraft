@@ -16,6 +16,7 @@ adapt = ADAPT(
     op_dir= "./data/adapt/",
     #af2_parameter_path="./params/af/params",
     boltz_docking=False,
+    boltz_num_samples=2,
     af2_model_name="model_2_ptm_ft_binder_20230729",
     key=Keygen(42),
     pmpnn_parameter_path="./params/pmpnn/v_48_030.pkl",
@@ -27,7 +28,6 @@ adapt = ADAPT(
     tcr_chain_index=(2,3),
     name="test_adapt_design",
     trim=True,
-    boltz_redocking=False,
     #out_dir = Path(os.environ["TMP"])/"test_adapt_design",
 )
 
@@ -68,14 +68,14 @@ for pdb_id, pmhc_id in zip(TCR_STRUCTURES, PMHC_STRUCTURES):
     else:
         pmhc_path = pmhc_id
     with open("./data/adapt/input_data/paired_human_cdr3s.tsv", "r") as rf:
-        ids = rf.readline().split("\t")
+        ids = rf.readline().strip("\n").split("\t")
         cdrs = {
-            i:n
-            for i,n in zip(ids, rf.readline().split("\t"))
+            i[-1]+i[:-1]:n
+            for i,n in zip(ids, rf.readline().strip("\n").split("\t"))
         }
     print(cdrs)
     adapt.design_trial(
         scaffold=pdb_path,
         pMHC=None,
-        cdrs={}
+        cdrs=cdrs
     )

@@ -11,7 +11,6 @@ Notes:
         """
 TODO:
 - implement length conservation with masking
-- implement model/params as input to avoid recompilation
 - add pmpnn hparams
 (- implement current design attribute)
 '''
@@ -326,7 +325,7 @@ class ADAPT:
     def boltz_docking_step(
         self,
         input_design:DesignData,
-        save_structure:bool=True,
+        save_structure:bool=False,
         evaluate:bool=False,
         is_target:np.ndarray|None=None,
         )->List[DesignData]|Tuple[List[DesignData], float]:
@@ -367,9 +366,9 @@ class ADAPT:
             out = [
                 DesignData(data=dict(
                 atom_positions=atom24[n],
-                atom_mask=mask24[n],
+                atom_mask=mask24,
                 aa=boltz_result.restype,
-                mask=mask24[n].any(axis=1),
+                mask=mask24.any(axis=1),
                 residue_index=boltz_result.residue_index,
                 chain_index=boltz_result.chain_index,
                 batch_index=jnp.zeros_like(boltz_result.residue_index),
@@ -473,149 +472,6 @@ class ADAPT:
             )
         return rmsd
 
-    def _design_trial(
-        self,
-        scaffold:str|Path|DesignData,
-        cdr3s:str|Path|Tuple[str],
-        pMHC:str|Path|DesignData|None=None,
-        redesign_all_cdrs:bool=False,
-    ):
-        '''Run a design step for recombination of TCRs with CDR3s'''
-        # Save original identifiers for output naming
-        scaffold_name = Path(scaffold).stem if isinstance(scaffold, (str, Path)) else "scaffold"
-        pmhc_name = Path(pMHC).stem if isinstance(pMHC, (str, Path)) else "pmhc"
-        pmhc_is_scaffold = pMHC is None or pMHC == scaffold
-
-        # process input
-        if not isinstance(scaffold, DesignData):
-            # load tcr
-            if isinstance(scaffold, str):
-                scaffold = Path(scaffold)
-            if scaffold.parent == self.in_dir:
-                scaffold = PDBFile(path=self.in_dir/scaffold.name).to_data()
-            else:
-                scaffold = PDBFile(path=scaffold).to_data()
-        # imgt numbering
-        scaffold = self.number_anarci(scaffold, trim=self.trim)
-
-        if pmhc_is_scaffold:
-            # check if all chains are present in the single structure
-            assert len(np.unique(scaffold["chain_index"])) == (len(self.mhc_chain_index) + len(self.tcr_chain_index) + 1), \
-                ValueError(f"No pMHC provided and TCR with incorrect chain number!")
-            design = scaffold
-        else:
-            if not isinstance(pMHC, DesignData):
-                # load pmhc
-                if isinstance(pMHC, str):
-                    pMHC = Path(pMHC)
-                if pMHC.parent == self.in_dir:
-                    pmhc = PDBFile(path=self.in_dir/pMHC.name).to_data()
-                else:
-                    pmhc = PDBFile(path=pMHC).to_data()
-            else:
-                pmhc = pMHC
-            # concatenate with split_chains
-            design = DesignData.concatenate([pmhc, scaffold], sep_chains=True)
-
-        # load cdr3s
-        if not isinstance(cdr3s, tuple):
-            if isinstance(cdr3s, str):
-                cdr3s = Path(cdr3s)
-            if cdr3s.parent == self.in_dir:
-                cdr3s = cdr3s.name
-            sep = "\t"
-            if "csv" in cdr3s.suffix:
-                sep = ","
-            df = pd.read_csv(self.in_dir/cdr3s, delimiter=sep)
-            cdr3a, cdr3b = df.sample(n=1).iloc[0].values
-        else:
-            cdr3a, cdr3b = cdr3s
-        # insert cdr3s
-        sequences = ({"acdr3": cdr3a}, {"bcdr3": cdr3b})
-        print("CDR3s: ", sequences)
-        print_dd(design, "Loaded")
-        if self.ab:
-            sequences = ({"lcdr3": cdr3a}, {"hcdr3": cdr3b})
-        design, _ = self.insert_cdr(
-            input_design=design,
-            chain_index=self.tcr_chain_index[0],
-            sequences=sequences[0]
-            )
-        design, _ = self.insert_cdr(
-            input_design=design,
-            chain_index=self.tcr_chain_index[1],
-            sequences=sequences[1]
-            )
-        print_dd(design, "Inserted")
-        # Build target mask from CDR IMGT positions on the final (renumbered) design.
-        # The two insertions may change the sequence length by different amounts, so
-        # masks from individual insert_cdr calls cannot be summed directly.
-        if redesign_all_cdrs:
-            if not self.ab:
-                alpha_cdrs = [f"acdr{n}" for n in range(1, 4)]
-                beta_cdrs = [f"bcdr{n}" for n in range(1, 4)]
-            else:
-                alpha_cdrs = [f"lcdr{n}" for n in range(1, 4)]
-                beta_cdrs = [f"hcdr{n}" for n in range(1, 4)]
-        else:
-            if not self.ab:
-                alpha_cdrs = [f"acdr3",]
-                beta_cdrs = [f"bcdr3",]
-            else:
-                alpha_cdrs = [f"lcdr3",]
-                beta_cdrs = [f"hcdr3",]
-        target_mask = (
-            self.cdr_mask(design, chain_index=self.tcr_chain_index[0], cdr_ids=alpha_cdrs)
-            + self.cdr_mask(design, chain_index=self.tcr_chain_index[1], cdr_ids=beta_cdrs)
-        ) > 0
-        # docking step (structure prediction without evaluation)
-        if self.boltz_docking:
-            boltz_designs = self.boltz_docking_step(input_design=design)
-            design = boltz_designs.pop()
-        else:
-            design = self.af_docking_step(input_design=design, is_target=target_mask)
-        print_dd(design, "Docked")
-        # redesign step: redesign the CDR positions
-        design = self.design_step(input_design=design, target_mask=target_mask)
-        print_dd(design, "Redesigned")
-        # save design as unique file name
-        file_name = f"{scaffold_name}_{pmhc_name}_0.pdb"
-        n = 0
-        while (self.out_dir/file_name).exists():
-            n += 1
-            file_name = f"{scaffold_name}_{pmhc_name}_{n}.pdb"
-        # redocking + evaluation step
-        if self.boltz_redocking:
-            boltz_designs, score = self.boltz_docking_step(
-                input_design=design,
-                evaluate=True,
-                is_target=target_mask,
-                save_structure=file_name,
-            )
-        else:
-            templates = None
-            if self.boltz_docking:
-                templates = boltz_designs
-            design, score = self.af_docking_step(
-                input_design=design,
-                evaluate=True,
-                is_target=target_mask,
-                templates=templates,
-                save_structure=file_name,
-            )
-        print_dd(design, "Redocked")
-        print(f"Saving design with score {score} to {file_name}!")
-        # Use a named Series so missing CDR1/CDR2 columns get NaN automatically
-        if not self.ab:
-            row = {"out_file": file_name, "score": score, "scaffold": scaffold_name, "pMHC": pmhc_name,
-                   "acdr3": cdr3a, "bcdr3": cdr3b}
-        else:
-            row = {"out_file": file_name, "score": score, "scaffold": scaffold_name, "pMHC": pmhc_name,
-                   "lcdr3": cdr3a, "hcdr3": cdr3b}
-        self.scores.loc[len(self.scores)] = pd.Series(row)
-        return score
-
-
     def design_trial(
         self,
         scaffold:str|Path|DesignData,
@@ -668,11 +524,9 @@ class ADAPT:
         sequences = ({},{})
         # load cdr
         for k,v in cdrs.items():
-            if not k in self.imgt_mapper:
-                out_key = cdrs.pop(k)
-                print(f"{out_key} not a known cdr. Proceeding without!")
-            sequences[k.startswith("h") or k.startswith(b)].update({k:v})
-            
+            if k in self.imgt_mapper:
+                sequences[k.startswith("h") or k.startswith("b")].update({k:v})
+
         print("CDRs: ", sequences)
         print_dd(design, "Loaded")
         design, _ = self.insert_cdr(
@@ -688,12 +542,9 @@ class ADAPT:
         print_dd(design, "Inserted")
 
         if redesign_all_cdrs:
-            if not self.ab:
-                alpha_cdrs = [f"acdr{n}" for n in range(1, 4)]
-                beta_cdrs = [f"bcdr{n}" for n in range(1, 4)]
-            else:
-                alpha_cdrs = [f"lcdr{n}" for n in range(1, 4)]
-                beta_cdrs = [f"hcdr{n}" for n in range(1, 4)]
+            pre = ["h","b"][int(self.ab)]
+            alpha_cdrs = [k for k in self.imgt_mapper.keys() if not k.startswith(pre)]
+            beta_cdrs = [k for k in self.imgt_mapper.keys() if k.startswith(pre)]
         else:
             alpha_cdrs = [k for k in sequences[0].keys()]
             beta_cdrs = [k for k in sequences[1].keys()]
@@ -744,18 +595,28 @@ class ADAPT:
         # Use a named Series so missing CDR1/CDR2 columns get NaN automatically
         if not self.ab:
             row = {"score": score, "scaffold": scaffold_name,
-                   **{cdr:self.get_cdr_seq(design, cdr) for cdr in self.imgt.keys()}}
+                   **{cdr:self.get_cdr_seq(design, cdr) for cdr in self.imgt_mapper.keys()}}
         else:
             row = {"score": score, "scaffold": scaffold_name,
-                   **{cdr:self.get_cdr_seq(design, cdr) for cdr in self.imgt.keys()}}
+                   **{cdr:self.get_cdr_seq(design, cdr) for cdr in self.imgt_mapper.keys()}}
         self.scores.loc[file_name] = pd.Series(row)
         return score
 
     def refine_trial(
         self,
         scaffold:DesignData|str|Path,
+        cdrs:List[str]|None=None,
         redesign_all_cdrs:bool=False,
         ):
+        if cdrs is None:
+            cdrs = ["acdr3", "bcdr3"] if self.ab else ["lcdr3", "hcdr3"]
+
+        # filter ids
+        for cdr in cdrs:
+            if cdr not in self.imgt_mapper.keys():
+                raise KeyError(f"Invalid cdr id {cdr}! Choose one of {[f'{k}, ' for k in self.imgt_mapper.keys()]} or change self.ab.")
+
+
         # fetch list of candidates
         # process input
         scaffold_name = Path(scaffold).stem.split("_")[0] if isinstance(scaffold, (str, Path)) else "scaffold"
@@ -771,24 +632,18 @@ class ADAPT:
         # mutate 2 cdr positions
         scaffold, mutated_cdrs = self.mutate_cdrs(
             input_design=scaffold,
-            cdrs="random",
+            cdrs=cdrs,
             n_mutations=2,
             )
 
         if redesign_all_cdrs:
-            if not self.ab:
-                alpha_cdrs = [f"acdr{n}" for n in range(1, 4)]
-                beta_cdrs = [f"bcdr{n}" for n in range(1, 4)]
-            else:
-                alpha_cdrs = [f"lcdr{n}" for n in range(1, 4)]
-                beta_cdrs = [f"hcdr{n}" for n in range(1, 4)]
+            pre = ["h","b"][int(self.ab)]
+            alpha_cdrs = [k for k in self.imgt_mapper.keys() if not k.startswith(pre)]
+            beta_cdrs = [k for k in self.imgt_mapper.keys() if k.startswith(pre)]
         else:
-            if not self.ab:
-                alpha_cdrs = [f"acdr3",]
-                beta_cdrs = [f"bcdr3",]
-            else:
-                alpha_cdrs = [f"lcdr3",]
-                beta_cdrs = [f"hcdr3",]
+            pre = ["h","b"][int(self.ab)]
+            alpha_cdrs = [cdr for cdr in cdrs if not cdr.startswith(pre)]
+            beta_cdrs = [cdr for cdr in cdrs if cdr.startswith(pre)]
         target_mask = (
             self.cdr_mask(scaffold, chain_index=self.tcr_chain_index[0], cdr_ids=alpha_cdrs)
             + self.cdr_mask(scaffold, chain_index=self.tcr_chain_index[1], cdr_ids=beta_cdrs)
@@ -894,12 +749,9 @@ class ADAPT:
             (DesignData, dict): the input design with mutated cdrs and a dict with the mutated cdrs
         """
         out_cdrs = {}
-        if not self.ab:
-            alpha_cdrs = [f"acdr{n}" for n in range(1, 4)]
-            beta_cdrs = [f"bcdr{n}" for n in range(1, 4)]
-        else:
-            alpha_cdrs = [f"lcdr{n}" for n in range(1, 4)]
-            beta_cdrs = [f"hcdr{n}" for n in range(1, 4)]
+        pre = ["h","b"][int(self.ab)]
+        alpha_cdrs = [k for k in self.imgt_mapper.keys() if not k.startswith(pre)]
+        beta_cdrs = [k for k in self.imgt_mapper.keys() if k.startswith(pre)]
 
         if isinstance(cdrs, str):
             if cdrs == "all":
