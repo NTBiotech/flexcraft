@@ -67,9 +67,15 @@ for pdb_id, pmhc_id in zip(TCR_STRUCTURES, PMHC_STRUCTURES):
         pmhc_path = clean_chothia(pdb_path)
     else:
         pmhc_path = pmhc_id
-
+    with open("./data/adapt/input_data/paired_human_cdr3s.tsv", "r") as rf:
+        ids = rf.readline().split("\t")
+        cdrs = {
+            i:n
+            for i,n in zip(ids, rf.readline().split("\t"))
+        }
+    print(cdrs)
     adapt.design_trial(
         scaffold=pdb_path,
         pMHC=None,
-        cdr3s="paired_human_cdr3s.tsv"
+        cdrs={}
     )
