@@ -9,6 +9,10 @@ Notes:
         cd ANARCI
         python setup.py install
         """
+TODO:
+- implement length conservation with masking
+- implement model/params as input to avoid recompilation
+(- implement current design attribute)
 '''
 from flexcraft.data.data import DesignData
 from flexcraft.files.pdb import PDBFile
@@ -38,7 +42,7 @@ class ADAPT:
     adapted from:
     Motmaen, A., Jude, K.M., Wang, N., Minervina, A., Feldman, D., Lichtenstein, M.A.,
     Ebenezer, A., Correnti, C., Thomas, P.G., Garcia, K.C., Baker, D., Bradley, P., 2025.
-    Targeting peptide–MHC complexes with designed T cell receptors and antibodies.
+    Targeting peptide-MHC complexes with designed T cell receptors and antibodies.
     https://doi.org/10.1101/2025.11.19.689381
     '''
     def __init__(
@@ -91,28 +95,9 @@ class ADAPT:
             print(f"Creating Output Directory at {self.out_dir}")
             self.out_dir.mkdir()
 
-        self.trim = trim
-        self.ab = ab
-        columns=["out_file","score","TCR","pMHC",]
-        if self.ab:
-            for n in range(1,4):
-                columns.append(f"lcdr{n}")
-                columns.append(f"hcdr{n}")
-        else:
-            for n in range(1,4):
-                columns.append(f"acdr{n}")
-                columns.append(f"bcdr{n}")
-        self.scores = pd.DataFrame(columns=columns)
-
-
         # map cdr id to start, end tuple (end exclusive)
+        self.ab = ab
         self.imgt_mapper = {
-            "lcdr1":(27,38),
-            "lcdr2":(56, 65),
-            "lcdr3":(105,117),
-            "hcdr1":(27,38),
-            "hcdr2":(56,65),
-            "hcdr3":(105,117),
             "acdr1":(27,38),
             "acdr2":(56, 65),
             "acdr3":(105,117),
@@ -120,6 +105,22 @@ class ADAPT:
             "bcdr2":(56,65),
             "bcdr3":(105,117),
             }
+        if self.ab:
+            self.imgt_mapper = {
+                "lcdr1":(27,38),
+                "lcdr2":(56, 65),
+                "lcdr3":(105,117),
+                "hcdr1":(27,38),
+                "hcdr2":(56,65),
+                "hcdr3":(105,117),}
+
+        self.trim = trim
+        columns=["score","scaffold",
+            *[
+            k for k in self.imgt_mapper.keys()
+            ]]
+        self.scores = pd.DataFrame(columns=columns)
+
         # chain indices
         # pack in array for comparative operations
         if isinstance(mhc_chain_index, int):
@@ -431,7 +432,7 @@ class ADAPT:
             )
         return rmsd
 
-    def design_trial(
+    def _design_trial(
         self,
         scaffold:str|Path|DesignData,
         cdr3s:str|Path|Tuple[str],
@@ -565,35 +566,85 @@ class ADAPT:
         print(f"Saving design with score {score} to {file_name}!")
         # Use a named Series so missing CDR1/CDR2 columns get NaN automatically
         if not self.ab:
-            row = {"out_file": file_name, "score": score, "TCR": scaffold_name, "pMHC": pmhc_name,
+            row = {"out_file": file_name, "score": score, "scaffold": scaffold_name, "pMHC": pmhc_name,
                    "acdr3": cdr3a, "bcdr3": cdr3b}
         else:
-            row = {"out_file": file_name, "score": score, "TCR": scaffold_name, "pMHC": pmhc_name,
+            row = {"out_file": file_name, "score": score, "scaffold": scaffold_name, "pMHC": pmhc_name,
                    "lcdr3": cdr3a, "hcdr3": cdr3b}
         self.scores.loc[len(self.scores)] = pd.Series(row)
         return score
 
-    def refine_trial(
+
+    def design_trial(
         self,
-        scaffold:DesignData|str|Path,
-        ):
-        # fetch list of candidates
+        scaffold:str|Path|DesignData,
+        cdrs:Dict[str,str],
+        pMHC:str|Path|DesignData|None=None,
+        redesign_all_cdrs:bool=False,
+    ):
+        '''Run a design step for recombination of TCRs with CDR3s'''
+        # Save original identifiers for output naming
+        scaffold_name = Path(scaffold).stem.split("_")[0] if isinstance(scaffold, (str, Path)) else "scaffold"
+        pmhc_name = Path(pMHC).stem if isinstance(pMHC, (str, Path)) else "pmhc"
+        scaffold_name += "+"+pmhc_name
+        pmhc_is_scaffold = pMHC is None or pMHC == scaffold
+
         # process input
         if not isinstance(scaffold, DesignData):
             # load tcr
             if isinstance(scaffold, str):
                 scaffold = Path(scaffold)
-            if scaffold.parent==self.in_dir:
-                scaffold = scaffold.name
-            scaffold = PDBFile(path=self.in_dir/scaffold).to_data()
+            if scaffold.parent == self.in_dir:
+                scaffold = PDBFile(path=self.in_dir/scaffold.name).to_data()
+            else:
+                scaffold = PDBFile(path=scaffold).to_data()
+
+        if pmhc_is_scaffold:
+            # check if all chains are present in the single structure
+            assert len(np.unique(scaffold["chain_index"])) == (len(self.mhc_chain_index) + len(self.tcr_chain_index) + 1), \
+                ValueError(f"No pMHC provided and TCR with incorrect chain number!")
+            design = scaffold
+        else:
+            if not isinstance(pMHC, DesignData):
+                # load pmhc
+                if isinstance(pMHC, str):
+                    pMHC = Path(pMHC)
+                if pMHC.parent == self.in_dir:
+                    pmhc = PDBFile(path=self.in_dir/pMHC.name).to_data()
+                else:
+                    pmhc = PDBFile(path=pMHC).to_data()
+            else:
+                pmhc = pMHC
+            if len(np.unique(pmhc["chain_index"]))>3:
+                pmhc = self.number_anarci(pmhc, trim=False)
+                pmhc = pmhc[(pmhc["chain_index"][:,None] != self.tcr_chain_index[None,:]).any(axis=1)]
+            # concatenate with split_chains
+            design = DesignData.concatenate([pmhc, scaffold], sep_chains=True)
+        
         # imgt numbering
-        scaffold = self.number_anarci(scaffold)
-        # mutate 2 cdr positions
-        scaffold = self.mutate_cdrs(
-            input_design=scaffold,
-            cdrs="random",
-            n_mutations=2,
+        design = self.number_anarci(design, trim=self.trim)
+
+        sequences = ({},{})
+        # load cdr
+        for k,v in cdrs.items():
+            if not k in self.imgt_mapper:
+                out_key = cdrs.pop(k)
+                print(f"{out_key} not a known cdr. Proceeding without!")
+            sequences[k.startswith("h") or k.startswith(b)].update({k:v})
+            
+        print("CDRs: ", sequences)
+        print_dd(design, "Loaded")
+        design, _ = self.insert_cdr(
+            input_design=design,
+            chain_index=self.tcr_chain_index[0],
+            sequences=sequences[0]
             )
+        design, _ = self.insert_cdr(
+            input_design=design,
+            chain_index=self.tcr_chain_index[1],
+            sequences=sequences[1]
+            )
+        print_dd(design, "Inserted")
 
         if redesign_all_cdrs:
             if not self.ab:
@@ -603,12 +654,9 @@ class ADAPT:
                 alpha_cdrs = [f"lcdr{n}" for n in range(1, 4)]
                 beta_cdrs = [f"hcdr{n}" for n in range(1, 4)]
         else:
-            if not self.ab:
-                alpha_cdrs = [f"acdr3",]
-                beta_cdrs = [f"bcdr3",]
-            else:
-                alpha_cdrs = [f"lcdr3",]
-                beta_cdrs = [f"hcdr3",]
+            alpha_cdrs = [k for k in sequences[0].keys()]
+            beta_cdrs = [k for k in sequences[1].keys()]
+        
         target_mask = (
             self.cdr_mask(design, chain_index=self.tcr_chain_index[0], cdr_ids=alpha_cdrs)
             + self.cdr_mask(design, chain_index=self.tcr_chain_index[1], cdr_ids=beta_cdrs)
@@ -620,17 +668,17 @@ class ADAPT:
             design = boltz_designs.pop()
         else:
             design = self.af_docking_step(input_design=design, is_target=target_mask)
-        print_dd(design, "Docked")
 
+        print_dd(design, "Docked")
         # redesign step: redesign the CDR positions
         design = self.design_step(input_design=design, target_mask=target_mask)
         print_dd(design, "Redesigned")
         # save design as unique file name
-        file_name = f"{scaffold_name}_{pmhc_name}_0.pdb"
+        file_name = f"{scaffold_name}_0.pdb"
         n = 0
         while (self.out_dir/file_name).exists():
             n += 1
-            file_name = f"{scaffold_name}_{pmhc_name}_{n}.pdb"
+            file_name = f"{scaffold_name}_{n}.pdb"
         # redocking + evaluation step
         if self.boltz_redocking:
             boltz_designs, score = self.boltz_docking_step(
@@ -654,23 +702,115 @@ class ADAPT:
         print(f"Saving design with score {score} to {file_name}!")
         # Use a named Series so missing CDR1/CDR2 columns get NaN automatically
         if not self.ab:
-            row = {"out_file": file_name, "score": score, "TCR": scaffold_name, "pMHC": pmhc_name,
-                   "acdr3": cdr3a, "bcdr3": cdr3b}
+            row = {"score": score, "scaffold": scaffold_name,
+                   **{cdr:self.get_cdr_seq(design, cdr) for cdr in self.imgt.keys()}}
         else:
-            row = {"out_file": file_name, "score": score, "TCR": scaffold_name, "pMHC": pmhc_name,
-                   "lcdr3": cdr3a, "hcdr3": cdr3b}
+            row = {"score": score, "scaffold": scaffold_name,
+                   **{cdr:self.get_cdr_seq(design, cdr) for cdr in self.imgt.keys()}}
+        self.scores.loc[file_name] = pd.Series(row)
+        return score
+
+    def refine_trial(
+        self,
+        scaffold:DesignData|str|Path,
+        redesign_all_cdrs:bool=False,
+        ):
+        # fetch list of candidates
+        # process input
+        scaffold_name = Path(scaffold).stem.split("_")[0] if isinstance(scaffold, (str, Path)) else "scaffold"
+        if not isinstance(scaffold, DesignData):
+            # load tcr
+            if isinstance(scaffold, str):
+                scaffold = Path(scaffold)
+            if scaffold.parent==self.in_dir:
+                scaffold = scaffold.name
+            scaffold = PDBFile(path=self.in_dir/scaffold).to_data()
+        # imgt numbering
+        scaffold = self.number_anarci(scaffold)
+        # mutate 2 cdr positions
+        scaffold, mutated_cdrs = self.mutate_cdrs(
+            input_design=scaffold,
+            cdrs="random",
+            n_mutations=2,
+            )
+
+        if redesign_all_cdrs:
+            if not self.ab:
+                alpha_cdrs = [f"acdr{n}" for n in range(1, 4)]
+                beta_cdrs = [f"bcdr{n}" for n in range(1, 4)]
+            else:
+                alpha_cdrs = [f"lcdr{n}" for n in range(1, 4)]
+                beta_cdrs = [f"hcdr{n}" for n in range(1, 4)]
+        else:
+            if not self.ab:
+                alpha_cdrs = [f"acdr3",]
+                beta_cdrs = [f"bcdr3",]
+            else:
+                alpha_cdrs = [f"lcdr3",]
+                beta_cdrs = [f"hcdr3",]
+        target_mask = (
+            self.cdr_mask(scaffold, chain_index=self.tcr_chain_index[0], cdr_ids=alpha_cdrs)
+            + self.cdr_mask(scaffold, chain_index=self.tcr_chain_index[1], cdr_ids=beta_cdrs)
+        ) > 0
+
+        # docking step (structure prediction without evaluation)
+        if self.boltz_docking:
+            boltz_designs = self.boltz_docking_step(input_design=scaffold)
+            scaffold = boltz_designs.pop()
+        else:
+            scaffold = self.af_docking_step(input_design=scaffold, is_target=target_mask)
+        print_dd(scaffold, "Docked")
+
+        # redesign step: redesign the CDR positions
+        scaffold = self.design_step(input_design=scaffold, target_mask=target_mask)
+        print_dd(scaffold, "Redesigned")
+        # save design as unique file name
+        file_name = f"{scaffold_name}_0.pdb"
+        n = 0
+        while (self.out_dir/file_name).exists():
+            n += 1
+            file_name = f"{scaffold_name}_{n}.pdb"
+        # redocking + evaluation step
+        if self.boltz_redocking:
+            scaffold, score = self.boltz_docking_step(
+                input_design=scaffold,
+                evaluate=True,
+                is_target=target_mask,
+                save_structure=file_name,
+            )
+        else:
+            templates = None
+            if self.boltz_docking:
+                templates = boltz_designs
+            scaffold, score = self.af_docking_step(
+                input_design=scaffold,
+                evaluate=True,
+                is_target=target_mask,
+                templates=templates,
+                save_structure=file_name,
+            )
+        print_dd(scaffold, "Redocked")
+        print(f"Saving design with score {score} to {file_name}!")
+        # Use a named Series so missing CDR1/CDR2 columns get NaN automatically
+        if not self.ab:
+            row = {"score": score, "scaffold": scaffold_name,
+                   **{cdr:self.get_cdr_seq(scaffold, cdr) for cdr in self.imgt_mapper.keys()}}
+        else:
+            row = {"score": score, "scaffold": scaffold_name,
+                   **{cdr:self.get_cdr_seq(scaffold, cdr) for cdr in self.imgt_mapper.keys()}}
 
         # compare to existing
-        self.compare(row)
-
+        print("Replacing ",self.compare(file_name,row))
 
     def compare(
         self,
+        file_name:str|Path,
         specs:pd.Series|dict,
         family_limit:int=10,
+        delete_file=True,
     ):
         '''
-        Compare design with previous designs. Adds specs to the scores, to then remove the worst performing design.
+        Compare design with previous designs. Adds specs to the self.scores DataFrame, to then remove the worst performing design.
         Args:
             specs:pd.Series|dict, specs to add to self.scores
             family_limit: int, the maximum number of designs from the same pMHC-TCR pair in the pool
@@ -678,23 +818,22 @@ class ADAPT:
             pd.Series: removed specs Series
         '''
         # add to pool and remove worst performing
-        self.scores.loc[len(self.scores)] = specs
-        family:pd.DataFrame = self.scores.loc[df["TCR"]==specs["TCR"]&df["pMHC"]==specs["pMHC"]]
+        self.scores.loc[file_name] = specs
+        family:pd.DataFrame = self.scores.loc[self.scores["scaffold"]==specs["scaffold"]]
         if len(family)>=family_limit:
             out_name = family.sort_values("score", ascending=True).iloc[0].name
         else:
             out_name = self.scores.sort_values("score", ascending=True).iloc[0].name
 
-        out = self.scores.pop(out_name)
-        print(f"Removing worst design {out} and adding {specs}.")
-        file_name = out["file_name"]
-        if not isinstance(file_name, Path):
-            file_name = Path(file_name)
-        if file_name.parent != self.out_dir:
-            file_name = self.out_dir/file_name
-        file_name.unlink()
-        return out
-
+        self.scores = self.scores.drop(index=out_name)
+        print(f"Removing worst design {out_name} and adding {specs}.")
+        if delete_file:
+            if not isinstance(file_name, Path):
+                out_name = Path(out_name)
+            if out_name.parent != self.out_dir:
+                out_name = self.out_dir/out_name
+            out_name.unlink()
+        return out_name
 
     def mutate_cdrs(
         self,
@@ -710,8 +849,10 @@ class ADAPT:
             cdrs: List[str], cdr ids for mutating. Alternative modes are "all" and "random", which are equivalent to mutate_all and mutating 1 cdr per chain respectively.
             n_muations: List[int]|int, number of mutations per cdr
             mutate_all: bool, if True, overrides cdrs and applies n_mutations to all cdrs (if n_mutations mismatches, the mean is applied to all cdrs)
+        Returns:
+            (DesignData, dict): the input design with mutated cdrs and a dict with the mutated cdrs
         """
-    
+        out_cdrs = {}
         if not self.ab:
             alpha_cdrs = [f"acdr{n}" for n in range(1, 4)]
             beta_cdrs = [f"bcdr{n}" for n in range(1, 4)]
@@ -740,21 +881,33 @@ class ADAPT:
 
         for cdr, n in zip(cdrs, n_mutations):
             chain_index = self.tcr_chain_index[int(cdr.startswith("h") or cdr.startswith("b"))]
-            positions = np.arange(*self.imgt_mapper[cdr])
+            # create new insert
+            target_mask = self.cdr_mask(
+                input_design=input_design,
+                cdr_ids=[cdr],
+                chain_index=chain_index
+            )
+            positions = np.arange(target_mask.sum())
             if n > len(positions):
                 print(f"CDR has length {len(positions)} and {n} mutations have been requested. Mutating the whole CDR!")
                 n = len(positions)
             # select random positions in range
             m_positions = np.random.choice(positions, size=n, replace=False)
             insert_mask = (positions[:,None]==m_positions[None,:]).any(axis=1)
-            # create new insert
-            target_mask = self.cdr_mask(
-                input_design=input_design,
-                cdr_ids=[cdr]
-            )
-            o_insert = input_design["aa"][target_mask]
+            o_insert = input_design["aa"][target_mask.astype(bool)]
             # select new bases
             i_insert = np.random.randint(0,20, size=len(o_insert))
+            print(
+                f"self.imgt_mapper[cdr]: {self.imgt_mapper[cdr]}",
+                f"cdr: {cdr}",
+                f"chain_index: {chain_index}",
+                f"insert_mask: {insert_mask}",
+                f"i_insert: {i_insert}",
+                f"o_insert: {o_insert}",
+                f"target_mask.sum(): {target_mask.sum()}",
+                sep="\n",
+                )
+
             i_insert = np.where(insert_mask, i_insert, o_insert)
             input_design,_ = self.insert_cdr(
                 input_design=input_design,
@@ -766,12 +919,27 @@ class ADAPT:
                 chains=[chain_index,],
                 trim=False,
             )
-        return input_design
+            out_cdrs.update({cdr:decode(i_insert, AF2_CODE)})
+        return input_design, out_cdrs
+
+    def get_cdr_seq(
+        self,
+        input_design:DesignData,
+        cdr:str,
+        decode:bool=True,
+        ):
+        target_mask = self.cdr_mask(
+            input_design=input_design,
+            cdr_ids=[cdr],
+        )
+        if decode:
+            return decode(input_design["aa"][target_mask], AF2_CODE)
+        return input_design["aa"][target_mask]
 
     def cdr_mask(self,
         input_design:DesignData,
-        chain_index:int,
         cdr_ids:Iterable[str],
+        chain_index:int|None=None,
         ):
         '''
         Get a float mask (1.0 for CDR, 0.0 for framework) for cdr_ids on chain chain_index.
@@ -783,7 +951,8 @@ class ADAPT:
         cdr_ids = list(cdr_ids)
         assert (np.array([x[0] for x in cdr_ids])[:,None]==np.array([x[0] for x in cdr_ids])[None,:]).all(), \
             ValueError("All cdrs must be on the same chain!")
-
+        if chain_index is None:
+            chain_index = self.tcr_chain_index[int(cdr_ids.startswith("h") or cdr_ids.startswith("b"))]
         positions = [self.imgt_mapper[k] for k in cdr_ids]
 
         chain_mask = np.array(input_design["chain_index"]) == chain_index
