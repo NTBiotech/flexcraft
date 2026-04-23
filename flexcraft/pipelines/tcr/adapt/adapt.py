@@ -12,6 +12,7 @@ Notes:
 TODO:
 - implement length conservation with masking
 - implement model/params as input to avoid recompilation
+- add pmpnn hparams
 (- implement current design attribute)
 '''
 from flexcraft.data.data import DesignData
@@ -26,10 +27,11 @@ from flexcraft.sequence.mpnn import make_pmpnn
 from flexcraft.sequence.sample import *
 
 from colabdesign.af.alphafold.model import utils as af_utils
+from jax._src.pjit import JitWrapped
 import anarci
 
 from pathlib import Path
-from typing import List, Tuple, Optional, Dict, Iterable
+from typing import List, Tuple, Optional, Dict, Iterable, Callable
 from datetime import datetime
 
 import numpy as np
@@ -48,9 +50,10 @@ class ADAPT:
     def __init__(
         self,
         op_dir:Path|str,
-        af2_model_name:str,
         key,
-        pmpnn_parameter_path:str,
+        pmpnn_sampler:Callable|None=None,
+        af2_model:None|JitWrapped=None,
+        af2_params:None|dict=None,
         boltz_docking:bool=False,
         boltz_redocking:bool=False,
         boltz_parameter_path:Path|str=Path("./params/boltz"),
@@ -59,9 +62,11 @@ class ADAPT:
         boltz_num_samples = 1,
         boltz_num_sampling_steps = 25,
         boltz_deterministic = False,
+        af2_model_name:str|None=None,
         af2_parameter_path:str|Path|None=None,
         af2_multimer:bool|None=None,
         af_num_recycle:int=0,
+        pmpnn_parameter_path:str|None=None,
         pmpnn_hparams:dict={},
         ab:bool = False,
         mhc_chain_index:int|Tuple[int]=0,
@@ -129,6 +134,57 @@ class ADAPT:
         if isinstance(tcr_chain_index, int):
             tcr_chain_index = (tcr_chain_index,)
         self.tcr_chain_index = np.array(tcr_chain_index)
+        
+        if pmpnn_sampler is None:
+            self.setup_pmpnn(
+                pmpnn_parameter_path=pmpnn_parameter_path,
+                pmpnn_hparams=pmpnn_hparams,
+            )
+        else:
+            self.pmpnn_sampler = pmpnn_sampler
+
+        
+        # AlphaFold
+        self.key = key
+        if af2_model is None or af2_params is None:
+            self.setup_af2(
+                af2_model_name=af2_model_name,
+                af2_parameter_path=af2_parameter_path,
+                af2_multimer=af2_multimer,
+            )
+        else:
+            self.af2_model = af2_model
+            self.af2_params = af2_params
+
+        # Boltz2
+        self.boltz_docking = boltz_docking
+        self.boltz_redocking = boltz_redocking
+        if self.boltz_docking or self.boltz_redocking:
+            self.boltz_parameter_path = boltz_parameter_path
+            self.boltz_model_name = boltz_model_name
+            self.boltz_model = Joltz2(model=self.boltz_model_name+".ckpt", cache=self.boltz_parameter_path)
+            self.boltz_num_recycle = boltz_num_recycle
+            self.boltz_num_samples = boltz_num_samples
+            self.boltz_num_sampling_steps = boltz_num_sampling_steps
+            self.boltz_deterministic = boltz_deterministic
+            self.boltz_predictor = self.boltz_model.predictor_adhoc(
+                num_recycle=self.boltz_num_recycle,
+                num_samples=self.boltz_num_samples,
+                num_sampling_steps=self.boltz_num_sampling_steps,
+                deterministic=self.boltz_deterministic
+            )
+        else:
+            self.boltz_parameter_path = None
+            self.boltz_model_name = None
+
+        self.rmsd = RMSD()
+        
+    def setup_pmpnn(
+        self,
+        pmpnn_parameter_path:str|None=None,
+        pmpnn_hparams:dict={},
+        ):
+
         # Protein MPNN TODO: add hparams
         self.pmpnn = jax.jit(make_pmpnn(pmpnn_parameter_path, eps=0.05))
         self.pmpnn_hparams = {
@@ -148,15 +204,23 @@ class ADAPT:
             forbid("C", aas.PMPNN_CODE),
             norm_logits
         ))
-
         self.pmpnn_sampler = sample(self.pmpnn, logit_transform=center_logits())
-        
-        # AlphaFold
+
+    def setup_af2(
+        self,
+        af2_model_name:str|None=None,
+        af2_parameter_path:str|Path|None=None,
+        af2_multimer:bool|None=None,
+        af_num_recycle:int=0,
+        ):
+
         self.af2_model_name = af2_model_name
-        self.key = key
-        if af2_parameter_path is None:
-            af2_parameter_path = (self.in_dir/self.af2_model_name).with_suffix(".pkl")
         self.af2_parameter_path = af2_parameter_path
+        assert (not af2_model_name is None) or (not af_parameter_path is None), ValueError("Specify either model name or parameter path!")
+        if self.af2_parameter_path is None:
+            self.af2_parameter_path = (self.in_dir/self.af2_model_name).with_suffix(".pkl")
+        if self.af2_model_name is None:
+            self.af2_model_name = self.af2_parameter_path.stem
         if isinstance(self.af2_parameter_path, str):
             self.af2_parameter_path = Path(self.af2_parameter_path)
         if self.af2_parameter_path.is_file():
@@ -185,9 +249,10 @@ class ADAPT:
                     model_name=self.af2_model_name,
                     data_dir=af2_parameter_path.__str__(), fuse=True)
 
+
         self.af_num_recycle = af_num_recycle
         if af2_multimer is None:
-            self.use_multimer = "multimer" in af2_model_name
+            self.use_multimer = "multimer" in self.af2_model_name
         else:
             self.use_multimer = af2_multimer
         self.af2_config = model_config(self.af2_model_name)
@@ -195,30 +260,6 @@ class ADAPT:
         self.af2_model = jax.jit(make_predict(
             make_af2(self.af2_config, use_multimer=self.use_multimer),
             num_recycle=self.af_num_recycle))
-
-        # Boltz2
-        self.boltz_docking = boltz_docking
-        self.boltz_redocking = boltz_redocking
-        if self.boltz_docking or self.boltz_redocking:
-            self.boltz_parameter_path = boltz_parameter_path
-            self.boltz_model_name = boltz_model_name
-            self.boltz_model = Joltz2(model=self.boltz_model_name+".ckpt", cache=self.boltz_parameter_path)
-            self.boltz_num_recycle = boltz_num_recycle
-            self.boltz_num_samples = boltz_num_samples
-            self.boltz_num_sampling_steps = boltz_num_sampling_steps
-            self.boltz_deterministic = boltz_deterministic
-            self.boltz_predictor = self.boltz_model.predictor_adhoc(
-                num_recycle=self.boltz_num_recycle,
-                num_samples=self.boltz_num_samples,
-                num_sampling_steps=self.boltz_num_sampling_steps,
-                deterministic=self.boltz_deterministic
-            )
-        else:
-            self.boltz_parameter_path = None
-            self.boltz_model_name = None
-
-        self.rmsd = RMSD()
-        
 
     def af_infer(self, af_input:AFInput) -> AFResult:
         '''
@@ -926,13 +967,13 @@ class ADAPT:
         self,
         input_design:DesignData,
         cdr:str,
-        decode:bool=True,
+        decode_seq:bool=True,
         ):
         target_mask = self.cdr_mask(
             input_design=input_design,
             cdr_ids=[cdr],
-        )
-        if decode:
+        ).astype(bool)
+        if decode_seq:
             return decode(input_design["aa"][target_mask], AF2_CODE)
         return input_design["aa"][target_mask]
 
@@ -952,7 +993,7 @@ class ADAPT:
         assert (np.array([x[0] for x in cdr_ids])[:,None]==np.array([x[0] for x in cdr_ids])[None,:]).all(), \
             ValueError("All cdrs must be on the same chain!")
         if chain_index is None:
-            chain_index = self.tcr_chain_index[int(cdr_ids.startswith("h") or cdr_ids.startswith("b"))]
+            chain_index = self.tcr_chain_index[int(cdr_ids[0].startswith("h") or cdr_ids[0].startswith("b"))]
         positions = [self.imgt_mapper[k] for k in cdr_ids]
 
         chain_mask = np.array(input_design["chain_index"]) == chain_index
