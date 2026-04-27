@@ -910,6 +910,7 @@ class JoltzResult(eqx.Module):
             chain_index=self.chain_index,
             batch_index=jnp.zeros_like(self.residue_index),
             plddt=self.plddt.mean(axis=0) if len(self.plddt.shape) == 2 else self.plddt,
+            pae=self.pae,
         )).untie()
 
 @dataclass
