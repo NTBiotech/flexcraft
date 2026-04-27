@@ -10,7 +10,7 @@ out_dir.mkdir()
 config = dict(
     op_dir="./data/adapt/",
     key = Keygen(42),
-    pmpnn_sampler=None,
+    pmpnn_model=None,
     af2_model=None,
     af2_params=None,
     boltz_docking=False,
@@ -33,10 +33,10 @@ config = dict(
     name="tuning",
     out_dir=None,
     trim=True,
-    chain_cache_len=650, # how long to pad for af
+    chain_cache_len=450, # how long to pad for af
 )
 
-TCR_STRUCTURES = ["4Y1A","8d5q", "2OI9", "5VCJ"]
+TCR_STRUCTURES = ["4Y1A", "5BS0"]#,"8d5q", "2OI9", "5VCJ"]
 
 # test af_parameters
 params_path = Path("./params/af/params")
@@ -44,10 +44,10 @@ af_parameter_paths=[Path("data/adapt/input_data/model_2_ptm_ft_binder_20230729.p
     *[p for p in params_path.glob("*.npz")]]
 
 n_refine_steps=5
-boltz_sample_range = np.linspace(1,10,4, dtype=int)
+boltz_sample_range = [1,3,7,10]
 
 scores = []
-for af_parameter_path in af_parameter_paths:
+for n, af_parameter_path in enumerate(af_parameter_paths[:1]):
     _config = copy(config)
     _config.update(af2_parameter_path=af_parameter_path)
     _config.update(out_dir=out_dir/f"af_params_{af_parameter_path.stem}")
@@ -72,27 +72,40 @@ for af_parameter_path in af_parameter_paths:
                 pdb_path,
                 cdrs=cdrs
             )
-        for n in range(n_refine_steps):
-            adapt.refine_trial(
-                adapt.get_design("random")
-            )
-        scores.append(adapt.get_scores()["score"].max())
+
+    for n in range(n_refine_steps):
+        print(f"refinement step {n}")
+
+        scaffold, pdb_path = adapt.get_design("random")
+
+        adapt.refine_trial(
+            scaffold,
+            scaffold_name=Path(pdb_path).stem.split("_")[0]
+        )
+    scores.append(adapt.get_scores()["score"].max())
+    config.update(
+    pmpnn_model=adapt.pmpnn,
+    )
 
 best_af = af_parameter_paths[np.argmax(scores)]
 best_af_score = max(scores)
-config.update(af_parameter_path=best_af)
+config.update(af2_parameter_path=best_af)
 
 # test boltz vs af in docking
 config.update(boltz_docking=True)
 boltz_scores = []
-for num_samples in boltz_sample_range:
+af2_params = None
+af2_model = None
+for n, num_samples in enumerate(boltz_sample_range[:1]):
     _config = copy(config)
     _config.update(boltz_num_samples=num_samples)
     _config.update(out_dir=out_dir/f"boltz_numsamples_{num_samples}")
     print(_config)
+    
     adapt = ADAPT(
         **_config
         )
+
     with open("./data/adapt/input_data/paired_human_cdr3s.tsv", "r") as rf:
         ids = rf.readline().strip("\n").split("\t")
         for pdb_id in TCR_STRUCTURES:
@@ -110,18 +123,22 @@ for num_samples in boltz_sample_range:
                 pdb_path,
                 cdrs=cdrs
             )
-        for n in range(n_refine_steps):
-            adapt.refine_trial(
-                adapt.get_design("random")
-            )
-        boltz_scores.append(adapt.get_scores()["score"].max())
+    for n in range(n_refine_steps):
+        scaffold, pdb_path = adapt.get_design("random")
+
+        adapt.refine_trial(
+            scaffold,
+            scaffold_name=Path(pdb_path).stem.split("_")[0]
+        )
+    boltz_scores.append(adapt.get_scores()["score"].max())
+    _config.update(
+        af2_params = adapt.af2_params,
+        af2_model = adapt.af2_model,
+        )
     
 
 best_boltz = boltz_sample_range[np.argmax(boltz_scores)]
 best_boltz_score = max(boltz_scores)
-
-
-
 
 print(
     "---AF Scores---",

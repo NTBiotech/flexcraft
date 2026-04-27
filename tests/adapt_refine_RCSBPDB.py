@@ -28,32 +28,12 @@ adapt = ADAPT(
     name="test_adapt_refine",
     trim=True,
     boltz_redocking=False,
+    chain_cache_len = 450
     #out_dir = Path(os.environ["TMP"])/"test_adapt_design",
 )
 
-
-def download_structure(pdb_id: str, file_format: str = "pdb", output_dir: str = "."):
-    """
-    Download a structure file from RCSB PDB.
-    
-    file_format: 'pdb', 'cif' (mmCIF), or 'bcif' (BinaryCIF)
-    """
-    base_urls = {
-        "pdb": f"https://files.rcsb.org/download/{pdb_id.upper()}.pdb",
-        "cif": f"https://files.rcsb.org/download/{pdb_id.upper()}.cif",
-        "bcif": f"https://models.rcsb.org/{pdb_id.lower()}.bcif",
-    }
-    url = base_urls[file_format]
-    response = requests.get(url)
-    response.raise_for_status()
-
-    suffix = {"pdb": ".pdb", "cif": ".cif", "bcif": ".bcif"}[file_format]
-    out_path = Path(output_dir) / f"{pdb_id.upper()}{suffix}"
-    out_path.write_bytes(response.content)
-    return out_path
-
-TCR_STRUCTURES = ["4Y1A","8d5q", "2OI9", "5VCJ"]
-PMHC_STRUCTURES = ["4Y1A","8d5q", "2OI9", "5VCJ"]
+TCR_STRUCTURES = ["4Y1A", "5BS0","8d5q", "2OI9", "5VCJ"]
+PMHC_STRUCTURES = ["4Y1A", "5BS0","8d5q", "2OI9", "5VCJ"]
 TMP_DIR = Path(os.environ["TMP"])/"test_adapt_design"
 
 for pdb_id, pmhc_id in zip(TCR_STRUCTURES, PMHC_STRUCTURES):

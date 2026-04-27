@@ -49,7 +49,7 @@ class ADAPT:
         self,
         op_dir:Path|str,
         key,
-        pmpnn_sampler:Callable|None=None,
+        pmpnn_model:Callable|None=None,
         af2_model:None|JitWrapped=None,
         af2_params:None|dict=None,
         boltz_docking:bool=False,
@@ -79,7 +79,7 @@ class ADAPT:
         Args:
             op_dir:Path|str, directory containing input_data subdir with TCR, pMHC and CDR files
             key, Key object used for AF inference
-            pmpnn_sampler:Callable|None=None, ProteinMPNN sampler callable for sequence prediction.
+            pmpnn_model:JitWrapped|None=None, ProteinMPNN model for sequence prediction.
                 If None, the model is loaded from params in the input_dir.
             af2_model:None|JitWrapped=None, AF2 Model for structure prediction.
                 If None, the model is loaded from params in the input_dir.
@@ -107,6 +107,8 @@ class ADAPT:
             out_dir:None|str|Path=None,
             trim:bool=False,
             chain_cache_len:int=400, # how long to pad for af
+        Attr:
+
         '''
         # directory organization
         if not isinstance(op_dir, Path):
@@ -154,7 +156,7 @@ class ADAPT:
                 "hcdr3":(105,117),}
 
         self.trim = trim
-        self.columns=["score","scaffold",
+        self.columns=["score","scaffold","in_pool",
             *[
             k for k in self.imgt_mapper.keys()
             ],
@@ -162,6 +164,7 @@ class ADAPT:
             f"{k}_coords" for k in self.imgt_mapper.keys()
             ],
             ]
+        self.columns_default = {"in_pool":True}
         self.scores = self.out_dir/"scores.csv"
         pd.DataFrame(columns=self.columns).to_csv(self.scores, header=True)
         self.cdr_coords = copy(self.imgt_mapper)
@@ -176,14 +179,13 @@ class ADAPT:
             tcr_chain_index = (tcr_chain_index,)
         self.tcr_chain_index = np.array(tcr_chain_index)
         
-        if pmpnn_sampler is None:
-            self.setup_pmpnn(
-                pmpnn_parameter_path=pmpnn_parameter_path,
-                pmpnn_hparams=pmpnn_hparams,
-            )
-        else:
-            self.pmpnn_sampler = pmpnn_sampler
-
+        
+        self.setup_pmpnn(
+            pmpnn_model=pmpnn_model,
+            pmpnn_parameter_path=pmpnn_parameter_path,
+            pmpnn_hparams=pmpnn_hparams,
+        )
+        
         # AlphaFold
         self.key = key
         if af2_model is None or af2_params is None:
@@ -224,6 +226,9 @@ class ADAPT:
     def write_scores(self, scores:pd.DataFrame):
         return scores[self.columns].to_csv(self.scores, header=True)
     def append_scores(self, row:pd.Series, name:str|None=None):
+        for c in self.columns:
+            if c not in row.index:
+                row[c] = self.columns_default.get(c, None)
         row.name = name
         return row.to_frame().T[self.columns].to_csv(self.scores, header=False, mode="a")
 
@@ -235,20 +240,22 @@ class ADAPT:
         design_length = len(input_design["aa"])
         if design_length<=self.chain_cache_len:
             return input_design
-        trim = (design_length-self.chain_cache_len)//len(self.mhc_chain_index)
+        trim = ((design_length-self.chain_cache_len)//len(self.mhc_chain_index))+1
         # trim the longest mhc chain
         chains, counts = np.unique(input_design["chain_index"], return_counts=True)
         mhc_mask = (chains[:, None]==self.mhc_chain_index[None,:]).any(axis=1)
+        print("trim_design self.mhc_chain_index",self.mhc_chain_index)
         for chain in self.mhc_chain_index:
+            print("trim_design chain",chain)
             chain_mask = input_design["chain_index"]==chain
-            trim_mask = np.zeros(len(input_design["aa"]), dtype=np.bool_)
+            if chain_mask.sum()-trim< 200:
+                print("WARNING! trimmed mhc chain to less than 200 AAs! Manual trimming may be necessary.")
+            trim_mask = np.ones(len(input_design["aa"]), dtype=np.bool_)
             chain_end = np.arange(len(chain_mask))[chain_mask][-1]+1
             # trim from the chain end
             trim_mask[chain_end-trim:chain_end] = False
-            print(f"Trimming chain {chain} by {trim} to length {trim_mask.sum()}.")
-            if chain_mask.sum()< 200:
-                print("WARNING! trimmed mhc chain to less than 200 AAs! Manual trimming may be necessary.")
             input_design = input_design[trim_mask]
+            print(f"Trimming chain {chain} by {trim} from {chain_mask.sum()} to a total of {len(input_design['aa'])} residues.")
         return input_design
 
     def pad_design(
@@ -262,10 +269,10 @@ class ADAPT:
         '''
         pad_length = self.chain_cache_len-len(input_design["aa"])
         if pad_length==0:
-            return input_design, pad_length, covariates
+            return input_design, pad_length, *covariates
         if pad_length<0:
             print(f"Design with length {len(input_design['aa'])} exceeds chain_cache_len {self.chain_cache_len}!\nSkipping padding step.")
-            return input_design
+            return input_design, pad_length, *covariates
         print(f"Padding design by {pad_length}...")
         atom_format = input_design["atom_mask"].shape[1]
         input_design = DesignData.concatenate(
@@ -302,6 +309,7 @@ class ADAPT:
 
     def setup_pmpnn(
         self,
+        pmpnn_model:None|JitWrapped=None,
         pmpnn_parameter_path:str|None=None,
         pmpnn_hparams:dict={},
         ):
@@ -317,15 +325,13 @@ class ADAPT:
             "center_logits":False,
         }
         self.pmpnn_hparams.update(pmpnn_hparams)
-        self.center_logits = self.pmpnn_hparams["center_logits"]
-        self.pmpnn_transform = lambda center, do_center, T: transform_logits((
+        self.pmpnn_transform = lambda center: transform_logits((
             toggle_transform(
-                center_logits(center), use=do_center),
+                center_logits(center), use=self.pmpnn_hparams["center_logits"]),
             scale_by_temperature(self.pmpnn_hparams["temperature"]),
             forbid("C", aas.PMPNN_CODE),
             norm_logits
         ))
-        self.pmpnn_sampler = sample(self.pmpnn, logit_transform=center_logits())
 
 
     def setup_af2(
@@ -380,6 +386,8 @@ class ADAPT:
         self.af2_model = jax.jit(make_predict(
             make_af2(self.af2_config, use_multimer=self.use_multimer),
             num_recycle=self.af_num_recycle))
+        
+        return self.af2_model, self.af2_params
 
 
     def af_infer(self, af_input:AFInput) -> AFResult:
@@ -433,7 +441,6 @@ class ADAPT:
 
         af_result = self.af_infer(af_input=af_input)
         design, is_target = self.rm_pad(af_result.to_data(), pad_length, is_target)
-        print(f"is_target {is_target.shape}")
         if evaluate:
             score = self.evaluate_step(result=design, input_design=input_design, is_target=is_target)
             if save_structure:
@@ -547,12 +554,11 @@ class ADAPT:
         target_aa = np.array(input_design["aa"])
         target_aa[target_mask] = 20
         input_design = input_design.update(aa=jnp.array(target_aa))
+        
+        logit_center = self.pmpnn(self.key(), input_design)["logits"].mean(axis=0)
+        pmpnn_sampler = sample(self.pmpnn, logit_transform=self.pmpnn_transform(logit_center))
 
-        if self.center_logits:
-            # calculate logit center over non-masked positions
-            logit_center = self.pmpnn(self.key(), input_design)["logits"].mean(axis=0)
-
-        pmpnn_result, _ = self.pmpnn_sampler(self.key(), input_design)
+        pmpnn_result, _ = pmpnn_sampler(self.key(), input_design)
         pmpnn_result = input_design.update(
             aa=aas.translate(pmpnn_result["aa"], aas.PMPNN_CODE, aas.AF2_CODE))
         return self.rm_pad(pmpnn_result, pad_length)
@@ -626,7 +632,9 @@ class ADAPT:
         pmhc_name = Path(pMHC).stem if isinstance(pMHC, (str, Path)) else "pmhc"
         scaffold_name += "+"+pmhc_name
         pmhc_is_scaffold = pMHC is None or pMHC == scaffold
-
+        print(
+            f"\n!---Design Trial for {scaffold_name}---!\n",
+        )
         # process input
         if not isinstance(scaffold, DesignData):
             # load tcr
@@ -661,8 +669,6 @@ class ADAPT:
         print_dd(design, "Input")
         # imgt numbering
         design = self.number_anarci(design, trim=self.trim)
-        if self.trim:
-            design = self.trim_design(design)
         
         sequences = ({},{})
         # load cdr
@@ -677,11 +683,14 @@ class ADAPT:
             chain_index=self.tcr_chain_index[0],
             sequences=sequences[0]
             )
+        print_dd(design, "Inserted1")
         design, _ = self.insert_cdr(
             input_design=design,
             chain_index=self.tcr_chain_index[1],
             sequences=sequences[1]
             )
+        if self.trim:
+            design = self.trim_design(design)
         print_dd(design, "Inserted")
 
         if redesign_all_cdrs:
@@ -736,14 +745,10 @@ class ADAPT:
         print_dd(design, "Redocked")
         print(f"Saving design with score {score} to {file_name}!")
         # Use a named Series so missing CDR1/CDR2 columns get NaN automatically
-        if not self.ab:
-            row = {"score": score, "scaffold": scaffold_name,
-                   **{cdr:self.get_cdr_seq(design, cdr) for cdr in self.imgt_mapper.keys()},
-                   **{f"{k}_coords":v for k, v in self.cdr_coords.items()}}
-        else:
-            row = {"score": score, "scaffold": scaffold_name,
-                   **{cdr:self.get_cdr_seq(design, cdr) for cdr in self.imgt_mapper.keys()},
-                   **{f"{k}_coords":v for k, v in self.cdr_coords.items()}}
+        row = {"score": score, "scaffold": scaffold_name,
+                **{cdr:self.get_cdr_seq(design, cdr) for cdr in self.imgt_mapper.keys()},
+                **{f"{k}_coords":v for k, v in self.cdr_coords.items()}}
+        print(row)
         self.append_scores(pd.Series(row), file_name)
         return score
 
@@ -769,13 +774,16 @@ class ADAPT:
             row = scores.loc[index]
         if isinstance(row, pd.DataFrame):
             row = row.iloc[0]
-        self.cdr_coords = {k:row[f"{k}_coords"] for k in self.imgt_mapper.keys()}
-        return PDBFile(path=self.out_dir/row.name).to_data()
+        to_tuple = lambda s: tuple([int(n) for n in s.strip("()").split(",")])
+        self.cdr_coords = {k:to_tuple(row[f"{k}_coords"]) if row[f"{k}_coords"] else self.imgt_mapper[k] for k in self.imgt_mapper.keys()}
+        design = PDBFile(path=self.out_dir/row.name).to_data()
+        return design, row.name
 
 
     def refine_trial(
         self,
         scaffold:DesignData|str|Path,
+        scaffold_name:str|None=None,
         cdrs:List[str]|None=None,
         redesign_all_cdrs:bool=False,
         ):
@@ -786,11 +794,11 @@ class ADAPT:
         for cdr in cdrs:
             if cdr not in self.imgt_mapper.keys():
                 raise KeyError(f"Invalid cdr id {cdr}! Choose one of {[f'{k}, ' for k in self.imgt_mapper.keys()]} or change self.ab.")
-        print(f"CDRs: {cdrs}")
 
         # fetch list of candidates
         # process input
-        scaffold_name = Path(scaffold).stem.split("_")[0] if isinstance(scaffold, (str, Path)) else "scaffold"
+        
+        scaffold_name = Path(scaffold).stem.split("_")[0] if isinstance(scaffold, (str, Path)) else scaffold_name
         if not isinstance(scaffold, DesignData):
             # load tcr
             if isinstance(scaffold, str):
@@ -798,10 +806,16 @@ class ADAPT:
             if scaffold.parent==self.in_dir:
                 scaffold = scaffold.name
             scaffold = PDBFile(path=self.in_dir/scaffold).to_data()
+        print(
+            f"\n!---Design Trial for {scaffold_name}---!\n",
+        )
+        print(f"CDRs: {cdrs}")
         # imgt numbering
+        print_dd(scaffold, "loaded")
         scaffold = self.number_anarci(scaffold, trim=self.trim)
         if self.trim:
             scaffold = self.trim_design(scaffold)
+        print_dd(scaffold, "trimmed")
         # mutate 2 cdr positions
         scaffold, mutated_cdrs = self.mutate_cdrs(
             input_design=scaffold,
@@ -816,9 +830,7 @@ class ADAPT:
         else:
             pre = ["b","h"][int(self.ab)]
             alpha_cdrs = [cdr for cdr in cdrs if not cdr.startswith(pre)]
-            print(alpha_cdrs)
             beta_cdrs = [cdr for cdr in cdrs if cdr.startswith(pre)]
-            print(beta_cdrs)
         target_mask = (
             self.cdr_mask(scaffold, chain_index=self.tcr_chain_index[0], cdr_ids=alpha_cdrs)
             + self.cdr_mask(scaffold, chain_index=self.tcr_chain_index[1], cdr_ids=beta_cdrs)
@@ -863,14 +875,9 @@ class ADAPT:
         print_dd(scaffold, "Redocked")
         print(f"Saving design with score {score} to {file_name}!")
         # Use a named Series so missing CDR1/CDR2 columns get NaN automatically
-        if not self.ab:
-            row = {"score": score, "scaffold": scaffold_name,
-                   **{cdr:self.get_cdr_seq(scaffold, cdr) for cdr in self.imgt_mapper.keys()}
-                   **[f"{k}_coords":v for k, v in self.cdr_coords.items()]}
-        else:
-            row = {"score": score, "scaffold": scaffold_name,
-                   **{cdr:self.get_cdr_seq(scaffold, cdr) for cdr in self.imgt_mapper.keys()}
-                   **[f"{k}_coords":v for k, v in self.cdr_coords.items()]}
+        row = {"score": score, "scaffold": scaffold_name,
+            **{cdr:self.get_cdr_seq(scaffold, cdr) for cdr in self.imgt_mapper.keys()},
+            **{f"{k}_coords":v for k, v in self.cdr_coords.items()}}
 
         # compare to existing
         print("Replacing ",self.compare(file_name,row))
@@ -881,7 +888,8 @@ class ADAPT:
         file_name:str|Path,
         specs:pd.Series|dict,
         family_limit:int=10,
-        delete_file=True,
+        full_limit:int=20,
+        delete_file=False,
     ):
         '''
         Compare design with previous designs. Adds specs to the self.scores DataFrame, to then remove the worst performing design.
@@ -897,12 +905,14 @@ class ADAPT:
         self.append_scores(specs, file_name)
         scores = self.get_scores()
         family:pd.DataFrame = scores.loc[scores["scaffold"]==specs["scaffold"]]
-        if len(family)>=family_limit:
-            out_name = family.sort_values("score", ascending=True).iloc[0].name
+        if len(family.loc[family["in_pool"]]) > family_limit:
+            out_name = family.loc[family["in_pool"]].sort_values("score", ascending=True).iloc[0].name
+        elif scores["in_pool"].sum() < full_limit:
+            return None
         else:
-            out_name = scores.sort_values("score", ascending=True).iloc[0].name
+            out_name = scores.loc["in_pool"].sort_values("score", ascending=True).iloc[0].name
 
-        scores = scores.drop(index=out_name)
+        scores.loc[out_name, "in_pool"] = False
         print(f"Removing worst design {out_name} and adding {specs}.")
         if delete_file:
             if not isinstance(file_name, Path):
@@ -959,44 +969,28 @@ class ADAPT:
         for cdr, n in zip(cdrs, n_mutations):
             chain_index = self.tcr_chain_index[int(cdr.startswith("h") or cdr.startswith("b"))]
             # create new insert
-            target_mask = self.cdr_mask(
-                input_design=input_design,
-                cdr_ids=[cdr],
-                chain_index=chain_index,
-                use_imgt_mapper=use_imgt_mapper
-            )
-            positions = np.arange(target_mask.sum())
+            o_insert = self.get_cdr_seq(input_design=input_design, cdr=cdr, decode_seq=False)
+            positions = np.arange(len(o_insert))
             if n > len(positions):
-                print(f"CDR has length {len(positions)} and {n} mutations have been requested. Mutating the whole CDR!")
+                print(f"CDR {cdr} has length {len(positions)} and {n} mutations have been requested. Mutating the whole CDR!")
                 n = len(positions)
             # select random positions in range
             m_positions = np.random.choice(positions, size=n, replace=False)
             insert_mask = (positions[:,None]==m_positions[None,:]).any(axis=1)
-            o_insert = input_design["aa"][target_mask.astype(bool)]
             # select new bases
             i_insert = np.random.randint(0,20, size=len(o_insert))
-            print(
-                f"self.imgt_mapper[cdr]: {self.imgt_mapper[cdr]}",
-                f"cdr: {cdr}",
-                f"chain_index: {chain_index}",
-                f"insert_mask: {insert_mask}",
-                f"i_insert: {i_insert}",
-                f"o_insert: {o_insert}",
-                f"target_mask.sum(): {target_mask.sum()}",
-                sep="\n",
-                )
-
             i_insert = np.where(insert_mask, i_insert, o_insert)
             input_design,_ = self.insert_cdr(
                 input_design=input_design,
                 chain_index=chain_index,
                 sequences={cdr:decode(i_insert, AF2_CODE)}
             )
-            self.number_anarci(
-                input_design=input_design,
-                chains=[chain_index,],
-                trim=False,
-            )
+
+            #self.number_anarci(
+            #    input_design=input_design,
+            #    chains=[chain_index,],
+            #    trim=False,
+            #)
             out_cdrs.update({cdr:decode(i_insert, AF2_CODE)})
         return input_design, out_cdrs
 
@@ -1017,7 +1011,6 @@ class ADAPT:
             return decode(input_design["aa"][target_mask], AF2_CODE)
         return input_design["aa"][target_mask]
 
-
     def cdr_mask(self,
         input_design:DesignData,
         cdr_ids:Iterable[str],
@@ -1036,30 +1029,34 @@ class ADAPT:
             ValueError("All cdrs must be on the same chain!")
         if chain_index is None:
             chain_index = self.tcr_chain_index[int(cdr_ids[0].startswith("h") or cdr_ids[0].startswith("b"))]
+
+        chain_mask = np.array(input_design["chain_index"]) == chain_index
+
         if use_imgt_mapper:
             positions = [self.imgt_mapper[k] for k in cdr_ids]
 
-            chain_mask = np.array(input_design["chain_index"]) == chain_index
             residue_index = np.array(input_design["residue_index"])
             all_cdr_positions = np.concatenate([np.arange(s, e) for s, e in positions])
             mask = (residue_index[:, None] == all_cdr_positions[None, :]).any(axis=1)
         else:
-            positions = [self.cdr_coords[k] for k in sequences.keys()]
-            mask = np.zeros(len(input_design["aa"]), dtype=np.bool_)
+            positions = [self.cdr_coords[k] for k in cdr_ids]
+            mask = np.zeros(chain_mask.sum(), dtype=np.bool_)
             for s,e in positions:
                 mask[s:e] = True
-        mask = mask & chain_mask
-        return mask.astype(float)
+        chain_mask[chain_mask] = mask
+
+        return chain_mask.astype(float)
 
 
     def insert_cdr(self,
         input_design:DesignData,
-        chain_index:int,
         sequences:Dict[str,str],
+        chain_index:int|None=None,
         use_imgt_mapper:bool=False
         ):
         '''
         Insert CDR sequences in TCR chain, replacing existing IMGT-numbered CDR positions.
+        Also adjusts cdr_coords.
         Args:
             input_design:DesignData, must contain TCR chain in "chain_index" key
             chain_index:int, chain_index value for TCR/Ab chain
@@ -1068,55 +1065,37 @@ class ADAPT:
             out:DesignData, design with CDRs replaced by the given sequences
             target_mask:np.ndarray, float mask: 1.0 for inserted CDR positions, 0.0 for framework
         '''
-        if use_imgt_mapper:
-            positions = [self.imgt_mapper[k] for k in sequences.keys()]
-        else:
-            positions = [self.cdr_coords[k] for k in sequences.keys()]
+        if chain_index is None:
+            chain_index = self.tcr_chain_index[int(cdr_ids[0].startswith("h") or cdr_ids[0].startswith("b"))]
 
         inserts = [DesignData.from_sequence(cdr).update(
             chain_index=jnp.full(len(cdr), chain_index)
             ) for cdr in sequences.values()]
 
         # Sort by IMGT start position
+        if use_imgt_mapper:
+            positions = [self.imgt_mapper[k] for k in sequences.keys()]
+        else:
+            positions = [self.cdr_coords[k] for k in sequences.keys()]
+        
         sorter = np.argsort([s for s, _ in positions])
         positions = np.array(positions)[sorter]
         inserts = [inserts[p] for p in sorter]
 
         for i in inserts:
             print_dd(i, "Insert")
-        chain_mask = np.array(input_design["chain_index"]) == chain_index
-        if use_imgt_mapper:
-            # if residue index faithful, use imgt_mapper
-            residue_index = np.array(input_design["residue_index"])
-            all_cdr_positions = np.concatenate([np.arange(s, e) for s, e in positions])
-            mask = (residue_index[:, None] == all_cdr_positions[None, :]).any(axis=1)
-        else:
-            # else use cdr coords tracking
-            mask = np.zeros(len(input_design["aa"]), dtype=np.bool_)
-            for s,e in positions:
-                mask[s:e] = True
-            # correct self.cdr_coords
-            offsets = {
-                k:len(seq)-(self.cdr_coords[k][1]-self.cdr_coords[k][0])
-                for k, seq in  sequences.items()}
-            # dict tracking dif per cdr
-            for k, offset in offsets.item():
-                self.cdr_coords[k] = (
-                    self.cdr_coords[k][0],
-                    self.cdr_coords[k][1]+offset)
-                # affected downstream cdrs
-                for i_k in self.imgt_mapper.keys():
-                    if i_k.startswith(k[0]) and int(i_k[-1])> int(k[-1]):
-                        self.cdr_coords[i_k] = (
-                            self.cdr_coords[i_k][0]+offset,
-                            self.cdr_coords[i_k][1]+offset)
 
-        mask = mask & chain_mask
+        cdr_mask = self.cdr_mask(
+            input_design=input_design,
+            cdr_ids = [k for k in sequences.keys()],
+            chain_index=chain_index,
+            use_imgt_mapper=use_imgt_mapper,
+            ).astype(np.bool_)
         # Build framework (non-CDR) segment slices — corrected off-by-one
         fw_slices = []
         in_cdr = False
         fw_start = 0
-        for i, current in enumerate(mask):
+        for i, current in enumerate(cdr_mask):
             if current and not in_cdr:
                 fw_slices.append(slice(fw_start, i))
                 in_cdr = True
@@ -1130,21 +1109,40 @@ class ADAPT:
         for insert, fw_slice in zip(inserts, fw_slices[1:]):
             parts.append(insert)
             parts.append(input_design[fw_slice])
-
+        for n,p in enumerate(parts):
+            print_dd(p, n)
         out = DesignData.concatenate(parts, sep_batch=False, sep_chains=False)
-
-        # Build target mask: 1.0 for inserted CDR, 0.0 for retained framework
-        mask_parts = [np.zeros(len(input_design[fw_slices[0]]["aa"]))]
-        for insert, fw_slice in zip(inserts, fw_slices[1:]):
-            mask_parts.append(np.ones(len(insert["aa"])))
-            mask_parts.append(np.zeros(len(input_design[fw_slice]["aa"])))
-        target_mask = np.concatenate(mask_parts)
+        print_dd(out, "out insert_cdr_concat")
 
         # Attempt to Update residue index with IMGT numbering for the modified chain TODO: still needed?
-        out = self.number_anarci(out, chains=(chain_index,))
-
-        assert len(out["aa"]) == len(target_mask), "CDR mask does not have the same length as construct!"
-        return out, target_mask
+        if use_imgt_mapper:
+            out = self.number_anarci(out, chains=(chain_index,), trim=False)
+        else:
+            # correct self.cdr_coords
+            offsets = {
+                k:len(seq)-(self.cdr_coords[k][1]-self.cdr_coords[k][0])
+                for k, seq in  sequences.items()}
+            total_offset = sum([s for s in offsets.values()])
+            # dict tracking dif per cdr
+            for k, offset in offsets.items():
+                self.cdr_coords[k] = (
+                    self.cdr_coords[k][0],
+                    self.cdr_coords[k][1]+offset)
+                # affected downstream cdrs
+                for i_k in self.imgt_mapper.keys():
+                    if i_k.startswith(k[0]) and int(i_k[-1])> int(k[-1]):
+                        self.cdr_coords[i_k] = (
+                            self.cdr_coords[i_k][0]+offset,
+                            self.cdr_coords[i_k][1]+offset)
+        cdr_mask = self.cdr_mask(
+            input_design=out,
+            cdr_ids = [k for k in sequences.keys()],
+            chain_index=chain_index,
+            use_imgt_mapper=use_imgt_mapper,
+            ).astype(np.bool_)
+        assert len(out["aa"]) == len(cdr_mask), "CDR mask does not have the same length as construct!"
+        assert len(input_design["aa"])==(len(out["aa"])-total_offset), f"Expected offset:{total_offset} vs actual offset {len(out['aa'])-len(input_design['aa'])} !"
+        return out, cdr_mask
 
 
     def number_anarci(
@@ -1154,6 +1152,7 @@ class ADAPT:
         code:str=AF2_CODE,
         scheme:str="imgt",
         trim:bool=False,
+        classify_all:bool = False
         )->DesignData:
         '''
         Update the residue index with standardized numbering. Trims recognized chains.
@@ -1167,6 +1166,7 @@ class ADAPT:
             DesignData
         '''
         if chains is None:
+            classify_all=True
             chains = np.unique(input_design["chain_index"])
         if isinstance(chains, int):
             chains = tuple(chains,)
@@ -1179,9 +1179,11 @@ class ADAPT:
             if numbering[0]:
                 print(f"Classified chain {chain} as {numbering[-1]}.")
                 chain_type = numbering[-1]
-                if chain_type == "A" and chain != self.tcr_chain_index[0]:
+                if chain_type == "A":
+                    print(f"Setting chain {chain} to tcr chain 0!")
                     self.tcr_chain_index[0] = chain
-                elif chain_type == "B" and chain != self.tcr_chain_index[1]:
+                elif chain_type == "B":
+                    print(f"Setting chain {chain} to tcr chain 1!")
                     self.tcr_chain_index[1] = chain
                 # Build IMGT position strings (e.g. "1", "111", "111A") then convert to int
                 numbering = [f"{x[0][0]}{x[0][1].strip()}" for x in numbering[0] if x[1] != "-"]
@@ -1206,13 +1208,16 @@ class ADAPT:
                 input_design = input_design.update(residue_index=jnp.array(residue_index))
 
                 # update cdr coords dict
-                pre = [["l", "h"],
-                ["a", "b"]][self.ab][chain_type=="B"]
+                pre = [["a", "b"],
+                    ["l", "h"],][self.ab][chain_type=="B"]
+                chain_mask = np.array(input_design["chain_index"]) == chain
                 for k,v in self.cdr_coords.items():
                     if k.startswith(pre):
+                        print("Configuring cdr_coords for ", k)
                         index = np.arange(chain_mask.sum())
-                        mask = (input_design["residue_index"][:, None]==np.arange(*self.imgt_mapper[k])[None,:]).any(axis=1)
+                        mask = (input_design["residue_index"][chain_mask][:, None]==np.arange(*self.imgt_mapper[k])[None,:]).any(axis=1)
                         self.cdr_coords[k] = (index[mask][0], index[mask][-1]+1)
+                
             else:
                 print(f"No numbering found for chain {chain}!")
                 if chain in self.tcr_chain_index:
@@ -1220,7 +1225,7 @@ class ADAPT:
         # check if chain indices correct
         if self.tcr_chain_index[0]==self.tcr_chain_index[1]:
             raise ValueError("TCR chains identical! Currently only 2 chain tcrs supported.")
-        if (self.mhc_chain_index[:,None] == self.tcr_chain_index[None,:]).any(axis=1):
+        if (self.mhc_chain_index[:,None] == self.tcr_chain_index[None,:]).any() or classify_all:
             # fix mhc chain index to longest non-tcr chain
             chains = np.unique(input_design["chain_index"])
             # mask out tcr chains
@@ -1271,10 +1276,10 @@ def load_data(out_dir:str|Path=Path("./data/adapt/input_data"),
                 zip_ref.extractall(out_dir)
 
 
-def print_dd(dd:DesignData, name:str="", keys:list=["chain_index", "mask", "pae"]):
+def print_dd(dd:DesignData, name:str="", keys:list=[]):
     try:
-        print(f"---{name}---",
-            *[f"{k}:\t shape: {v.shape}" for k,v in dd.data.items() if k in keys],
+        print(f"\n---{name}---",
+            *[f"{k}:{v}\n\t shape: {v.shape}" for k,v in dd.data.items() if k in keys],
             sep="\n"
             )
     except KeyError:
