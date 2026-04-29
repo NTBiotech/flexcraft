@@ -13,7 +13,7 @@ config = dict(
     pmpnn_model=None,
     af2_model=None,
     af2_params=None,
-    boltz_docking=False,
+    boltz_docking=True,
     boltz_redocking=False,
     boltz_parameter_path=Path("./params/boltz"),
     boltz_model_name="boltz2_conf",
@@ -21,10 +21,10 @@ config = dict(
     boltz_num_samples = 1,
     boltz_num_sampling_steps = 25,
     boltz_deterministic = False,
-    af2_model_name="model_2_ptm_ft_binder_20230729",
+    af2_model_name=None,
     af2_parameter_path=None,
     af2_multimer=None,
-    af_num_recycle=0,
+    af2_num_recycle=0,
     pmpnn_parameter_path="./params/pmpnn/v_48_030.pkl",
     pmpnn_hparams={},
     ab = False,
@@ -35,60 +35,88 @@ config = dict(
     trim=True,
     chain_cache_len=450, # how long to pad for af
 )
-
-TCR_STRUCTURES = ["4Y1A", "5BS0"]#,"8d5q", "2OI9", "5VCJ"]
-
+unique_targets = [
+    ("A*01:01", "EVDPIGHLY"),   # MAGE-A3
+    ("A*02:01", "TLMSAMTNL"),   # PAP
+    ("A*02:01", "ALYDKTKRI"),   # TdT
+    ("A*02:01", "GLMWLSYFV"),   # SARS
+    ("A*02:01", "HMTEVVRHC"),   # p53
+    ("A*02:01", "LLWNGPIAV"),   # YFV
+    ("A*03:01", "ALHGGWTTK"),   # PIK3CA
+    ("A*11:01", "VVVGADGVGK"),  # KRAS
+    ("B*44:02", "SEITKQEKDF"),  # PIK3CA
+]
+#TCR_STRUCTURES = ["4Y1A", "5BS0","8d5q", "2OI9", "5VCJ"]
+TCR_STRUCTURES = ["5BS0",]# "1OGA", "3QDG", "7OW6", "3GSN", "7RRG", "7N2R", "5EU6"]
+AB_STRUCTURES = ["6YIO",]# "7LSG", "7YV1", "7KQL", "7SSC"]
 # test af_parameters
 params_path = Path("./params/af/params")
 af_parameter_paths=[Path("data/adapt/input_data/model_2_ptm_ft_binder_20230729.pkl"),
     *[p for p in params_path.glob("*.npz")]]
 
-n_refine_steps=5
+n_refine_steps=10
 boltz_sample_range = [1,3,7,10]
 
 scores = []
-for n, af_parameter_path in enumerate(af_parameter_paths[:1]):
-    _config = copy(config)
+for n, af_parameter_path in enumerate(af_parameter_paths):
+    _config = config.copy()
+    _config.update(af2_parameter_path=af_parameter_path)
     _config.update(af2_parameter_path=af_parameter_path)
     _config.update(out_dir=out_dir/f"af_params_{af_parameter_path.stem}")
     print(_config)
-    adapt = ADAPT(
-        **_config
-    )
-    with open("./data/adapt/input_data/paired_human_cdr3s.tsv", "r") as rf:
-        ids = rf.readline().strip("\n").split("\t")
-        for pdb_id in TCR_STRUCTURES:
-            if not "." in pdb_id:
-                pdb_path = download_structure(pdb_id, output_dir="./data/adapt/input_data")
-                pdb_path = clean_chothia(pdb_path)
-            else:
-                pdb_path = pdb_id
-            cdrs = {
-                i[-1]+i[:-1]:n
-                for i,n in zip(ids, rf.readline().strip("\n").split("\t"))
-            }
-            print(cdrs)
-            adapt.design_trial(
-                pdb_path,
-                cdrs=cdrs
-            )
-
-    for n in range(n_refine_steps):
-        print(f"refinement step {n}")
-
-        scaffold, pdb_path = adapt.get_design("random")
-
-        adapt.refine_trial(
-            scaffold,
-            scaffold_name=Path(pdb_path).stem.split("_")[0]
+    for (mhc_allele,antigen) in unique_targets[1:]:
+        adapt = ADAPT(
+            **_config
         )
-    scores.append(adapt.get_scores()["score"].max())
-    config.update(
-    pmpnn_model=adapt.pmpnn,
-    )
+        mhc_seq = get_mhc(name=mhc_allele)
+        with open("./data/adapt/input_data/paired_human_cdr3s.tsv", "r") as rf:
+            ids = rf.readline().strip("\n").split("\t")
+            for pdb_id, is_ab in zip(TCR_STRUCTURES+AB_STRUCTURES,
+                                    np.concatenate([np.zeros(len(TCR_STRUCTURES), dtype=np.bool_),
+                                            np.ones(len(AB_STRUCTURES), dtype=np.bool_)])):
 
-best_af = af_parameter_paths[np.argmax(scores)]
-best_af_score = max(scores)
+                cdrs = {
+                    i[-1]+i[:-1]:n
+                    for i,n in zip(ids, rf.readline().strip("\n").split("\t"))
+                }
+                scaffold = clean_chothia(
+                        download_structure(
+                            pdb_id=pdb_id, out_dir="./data/adapt/input_data",
+                            file_format="antibody" if is_ab else "biological assembly"))
+                scaffold, scaffold_name = adapt.make_scaffold(
+                    receptor=scaffold,
+                    antigen=antigen,
+                    presenter=mhc_seq,
+                    cdrs=cdrs,
+                    trim=True,
+                    replace_antigen=True,
+                )
+
+                adapt.design_trial(
+                    design=scaffold,
+                    scaffold_name=scaffold_name
+                )
+
+        for n in range(n_refine_steps):
+            print(f"refinement step {n}")
+
+            scaffold, pdb_path, scaffold_name = adapt.get_design("random")
+
+            adapt.refine_trial(
+                scaffold,
+                scaffold_name=scaffold_name
+            )
+        scores.append(adapt.get_scores()["score"].min())
+        _config.update(
+        af2_params = adapt.af2_params,
+        af2_model = adapt.af2_model,
+        )
+        config.update(
+        pmpnn_model=adapt.pmpnn,
+        )
+
+best_af = af_parameter_paths[np.argmin(scores)]
+best_af_score = min(scores)
 config.update(af2_parameter_path=best_af)
 
 # test boltz vs af in docking
@@ -97,7 +125,7 @@ boltz_scores = []
 af2_params = None
 af2_model = None
 for n, num_samples in enumerate(boltz_sample_range[:1]):
-    _config = copy(config)
+    _config = config.copy()
     _config.update(boltz_num_samples=num_samples)
     _config.update(out_dir=out_dir/f"boltz_numsamples_{num_samples}")
     print(_config)
@@ -105,40 +133,57 @@ for n, num_samples in enumerate(boltz_sample_range[:1]):
     adapt = ADAPT(
         **_config
         )
-
-    with open("./data/adapt/input_data/paired_human_cdr3s.tsv", "r") as rf:
-        ids = rf.readline().strip("\n").split("\t")
-        for pdb_id in TCR_STRUCTURES:
-            if not "." in pdb_id:
-                pdb_path = download_structure(pdb_id, output_dir="./data/adapt/input_data")
-                pdb_path = clean_chothia(pdb_path)
-            else:
-                pdb_path = pdb_id
-            cdrs = {
-                i[-1]+i[:-1]:n
-                for i,n in zip(ids, rf.readline().strip("\n").split("\t"))
-            }
-            print(cdrs)
-            adapt.design_trial(
-                pdb_path,
-                cdrs=cdrs
-            )
-    for n in range(n_refine_steps):
-        scaffold, pdb_path = adapt.get_design("random")
-
-        adapt.refine_trial(
-            scaffold,
-            scaffold_name=Path(pdb_path).stem.split("_")[0]
+    for (mhc_allele,antigen) in unique_targets[1:]:
+        adapt = ADAPT(
+            **_config
         )
-    boltz_scores.append(adapt.get_scores()["score"].max())
+        mhc_seq = get_mhc(name=mhc_allele)
+        with open("./data/adapt/input_data/paired_human_cdr3s.tsv", "r") as rf:
+            ids = rf.readline().strip("\n").split("\t")
+            for pdb_id, is_ab in zip(TCR_STRUCTURES+AB_STRUCTURES,
+                                    np.concatenate([np.zeros(len(TCR_STRUCTURES), dtype=np.bool_),
+                                            np.ones(len(AB_STRUCTURES), dtype=np.bool_)])):
+
+                cdrs = {
+                    i[-1]+i[:-1]:n
+                    for i,n in zip(ids, rf.readline().strip("\n").split("\t"))
+                }
+                scaffold = clean_chothia(
+                        download_structure(
+                            pdb_id=pdb_id, out_dir="./data/adapt/input_data",
+                            file_format="antibody" if is_ab else "biological assembly"))
+                scaffold, scaffold_name = adapt.make_scaffold(
+                    receptor=scaffold,
+                    antigen=antigen,
+                    presenter=mhc_seq,
+                    cdrs=cdrs,
+                    trim=True,
+                    replace_antigen=True,
+                )
+
+                adapt.design_trial(
+                    design=scaffold,
+                    scaffold_name=scaffold_name
+                )
+
+        for n in range(n_refine_steps):
+            print(f"refinement step {n}")
+
+            scaffold, pdb_path, scaffold_name = adapt.get_design("random")
+
+            adapt.refine_trial(
+                scaffold,
+                scaffold_name=scaffold_name
+            )
+        boltz_scores.append(adapt.get_scores()["score"].min())
+
     _config.update(
         af2_params = adapt.af2_params,
         af2_model = adapt.af2_model,
         )
-    
 
-best_boltz = boltz_sample_range[np.argmax(boltz_scores)]
-best_boltz_score = max(boltz_scores)
+best_boltz = boltz_sample_range[np.argmin(boltz_scores)]
+best_boltz_score = min(boltz_scores)
 
 print(
     "---AF Scores---",
