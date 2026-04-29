@@ -10,9 +10,9 @@ Notes:
         python setup.py install
         """
 TODO:
+- add boltz model as input
 - profile to see pmpnn vs. af
 - boltz msa or template .pdb
-- add boltz model as input
 (- implement current design attribute)
 - design cdrs with salad/boltz
 - add structure templates from canonical tcrs
@@ -59,25 +59,9 @@ class ADAPT:
         self,
         op_dir:Path|str,
         key,
-        pmpnn_model:Callable|None=None,
-        af2_model:None|JitWrapped=None,
-        af2_params:None|dict=None,
-        boltz_docking:bool=False,
-        boltz_redocking:bool=False,
-        boltz_parameter_path:Path|str=Path("./params/boltz"),
-        boltz_model_name:str="boltz2_conf",
-        boltz_num_recycle = 2,
-        boltz_num_samples = 1,
-        boltz_num_sampling_steps = 25,
-        boltz_deterministic = False,
-        af2_model_name:str|None=None,
-        af2_parameter_path:str|Path|None=None,
-        af2_multimer:bool|None=None,
-        af2_num_recycle:int=0,
-        pmpnn_parameter_path:str|None=None,
-        pmpnn_hparams:dict={},
-        pmpnn_n_per_target:int=3,
-        ab:bool = False,
+        boltz_config:dict={},
+        af2_config:dict={},
+        pmpnn_config:dict={},
         mhc_chain_index:int|Tuple[int]=0,
         tcr_chain_index:int|Tuple[int]=(2,3),
         name="AdaptTrial",
@@ -119,7 +103,6 @@ class ADAPT:
             out_dir:None|str|Path=None,
             trim:bool=False,
             chain_cache_len:int=400, # how long to pad for af
-        Attr:
 
         '''
         # directory organization
@@ -187,47 +170,62 @@ class ADAPT:
         
         
         self.setup_pmpnn(
-            pmpnn_model=pmpnn_model,
-            pmpnn_parameter_path=pmpnn_parameter_path,
-            pmpnn_hparams=pmpnn_hparams,
-            pmpnn_n_per_target=pmpnn_n_per_target
+            **pmpnn_config
         )
         
         # AlphaFold
         self.key = key
-        if af2_model is None or af2_params is None:
-            self.setup_af2(
-                af2_model_name=af2_model_name,
-                af2_parameter_path=af2_parameter_path,
-                af2_multimer=af2_multimer,
-            )
-        else:
-            self.af2_model = af2_model
-            self.af2_params = af2_params
+        self.setup_af2(
+            **af2_config
+        )
 
         # Boltz2
-        self.boltz_docking = boltz_docking
-        self.boltz_redocking = boltz_redocking
+        self.setup_boltz(
+            **boltz_config
+        )
+
+        self.rmsd = RMSD()
+    
+    def setup_boltz(self,
+        **boltz_config
+        ):
+
+        config = {
+
+            "docking":False,
+            "redocking":False,
+            "parameter_path":Path("./params/boltz"),
+            "model_name":"boltz2_conf",
+            "num_recycle":2,
+            "num_samples":1,
+            "num_sampling_steps":25,
+            "deterministic":False,
+            "predictor":None}
+        config.update(boltz_config)
+
+        self.boltz_docking = config["docking"]
+        self.boltz_redocking = config["redocking"]
         if self.boltz_docking or self.boltz_redocking:
-            self.boltz_parameter_path = boltz_parameter_path
-            self.boltz_model_name = boltz_model_name
-            self.boltz_model = Joltz2(model=self.boltz_model_name+".ckpt", cache=self.boltz_parameter_path)
-            self.boltz_num_recycle = boltz_num_recycle
-            self.boltz_num_samples = boltz_num_samples
-            self.boltz_num_sampling_steps = boltz_num_sampling_steps
-            self.boltz_deterministic = boltz_deterministic
-            self.boltz_predictor = self.boltz_model.predictor_adhoc(
-                num_recycle=self.boltz_num_recycle,
-                num_samples=self.boltz_num_samples,
-                num_sampling_steps=self.boltz_num_sampling_steps,
-                deterministic=self.boltz_deterministic
-            )
+            self.boltz_parameter_path = config["parameter_path"]
+            self.boltz_model_name = config["model_name"]
+            self.boltz_num_recycle = config["num_recycle"]
+            self.boltz_num_samples = config["num_samples"]
+            self.boltz_num_sampling_steps = config["num_sampling_steps"]
+            self.boltz_deterministic = config["deterministic"]
+            if config["predictor"] is None:
+                self.boltz_model = Joltz2(model=self.boltz_model_name+".ckpt", cache=self.boltz_parameter_path)
+                self.boltz_predictor = self.boltz_model.predictor_adhoc(
+                    num_recycle=self.boltz_num_recycle,
+                    num_samples=self.boltz_num_samples,
+                    num_sampling_steps=self.boltz_num_sampling_steps,
+                    deterministic=self.boltz_deterministic
+                )
+            else:
+                self.boltz_predictor = config["predictor"]
         else:
             self.boltz_parameter_path = None
             self.boltz_model_name = None
 
-        self.rmsd = RMSD()
-    
     def get_scores(self):
         return pd.read_csv(self.scores, header=0, index_col=0)
     def write_scores(self, scores:pd.DataFrame):
@@ -317,17 +315,16 @@ class ADAPT:
 
     def setup_pmpnn(
         self,
-        pmpnn_model:None|JitWrapped=None,
-        pmpnn_parameter_path:str|None=None,
-        pmpnn_hparams:dict={},
-        pmpnn_n_per_target:int=1
+        **pmpnn_config
         ):
+        
+        config = {
+        "pmpnn_model":None,
+        "pmpnn_parameter_path":None,
+        "pmpnn_hparams":{},
+        "pmpnn_n_per_target":3}
+        config.update(pmpnn_config)
 
-        # Protein MPNN TODO: add hparams
-        if pmpnn_model is None:
-            self.pmpnn = jit(make_pmpnn(pmpnn_parameter_path, eps=0.05))
-        else:
-            self.pmpnn = pmpnn_model
         self.pmpnn_hparams = {
             "temperature":0.1,
             "model_name":'v_48_020',
@@ -335,7 +332,14 @@ class ADAPT:
             "training_noise":0.2,#Å,
             "center_logits":False,
         }
-        self.pmpnn_hparams.update(pmpnn_hparams)
+        self.pmpnn = config["pmpnn_model"]
+        self.pmpnn_parameter_path = config["pmpnn_parameter_path"]
+        self.pmpnn_hparams.update(config["pmpnn_hparams"])
+        self.pmpnn_n_per_target = config["pmpnn_n_per_target"]
+
+        if self.pmpnn is None:
+            self.pmpnn = jit(make_pmpnn(pmpnn_parameter_path, eps=0.05))
+
         self.pmpnn_transform = lambda center: transform_logits((
             toggle_transform(
                 center_logits(center), use=self.pmpnn_hparams["center_logits"]),
@@ -343,61 +347,72 @@ class ADAPT:
             forbid("C", aas.PMPNN_CODE),
             norm_logits
         ))
-        self.pmpnn_n_per_target = pmpnn_n_per_target
 
 
     def setup_af2(
         self,
-        af2_model_name:str|None=None,
-        af2_parameter_path:str|Path|None=None,
-        af2_multimer:bool|None=None,
-        af2_num_recycle:int=0,
+        **af2_config
         ):
+        
+        
+        config = {
+        "af2_model":None,
+        "af2_params":None,
+        "af2_model_name":None,
+        "af2_parameter_path":None,
+        "af2_multimer":True,
+        "af2_num_recycle":0,
+        }
 
-        self.af2_model_name = af2_model_name
-        self.af2_parameter_path = af2_parameter_path
-        assert (not af2_model_name is None) or (not af2_parameter_path is None), ValueError("Specify either model name or parameter path!")
-        if self.af2_parameter_path is None:
-            self.af2_parameter_path = (self.in_dir/self.af2_model_name).with_suffix(".pkl")
-        if self.af2_model_name is None:
-            self.af2_model_name = self.af2_parameter_path.stem
-        if isinstance(self.af2_parameter_path, str):
-            self.af2_parameter_path = Path(self.af2_parameter_path)
-        if self.af2_parameter_path.suffix == ".pkl":
-            # if params in pickle we expect fine-tuned parameters from zenodo, see load_data
-            import pickle
-            with open(self.af2_parameter_path, "rb") as rf:
-                params = pickle.load(rf)
-            # filer param keys and adjust formatting
-            clean_params = {}
-            for k,v in params.items():
-                if not "/" in k:
-                    print(f"Skipping {k}")
-                    continue
-                if not isinstance(v, dict):
-                    print(f"{k} has no dict")
-                    continue
-                for n,i in v.items():
-                    clean_params[f"{k}//{n}"] = i
-            self.af2_params = af_utils.flat_params_to_haiku(params=clean_params, fuse=True)
-            # adjust model name
-            self.af2_model_name = "_".join(self.af2_model_name.split("_")[:3])
-        else:
-            self.af2_params = get_model_haiku_params(
-                    model_name=self.af2_model_name,
-                    data_dir=af2_parameter_path.__str__(), fuse=True)
+        config.update(af2_config)
+        self.af2_model = config["af2_model"]
+        self.af2_params = config["af2_params"]
+        self.af2_model_name = config["af2_model_name"]
+        self.af2_parameter_path = config["af2_parameter_path"]
+        self.af2_multimer = config["af2_multimer"]
+        self.af2_num_recycle = config["af2_num_recycle"]
+
+        if self.af2_model is None or self.af2_params is None:
+            assert (not self.af2_model_name is None) or (not self.af2_parameter_path is None), ValueError("Specify either model name or parameter path!")
+            if self.af2_parameter_path is None:
+                self.af2_parameter_path = (self.in_dir/self.af2_model_name).with_suffix(".pkl")
+            if self.af2_model_name is None:
+                self.af2_model_name = self.af2_parameter_path.stem
+            if isinstance(self.af2_parameter_path, str):
+                self.af2_parameter_path = Path(self.af2_parameter_path)
+            if self.af2_parameter_path.suffix == ".pkl":
+                # if params in pickle we expect fine-tuned parameters from zenodo, see load_data
+                import pickle
+                with open(self.af2_parameter_path, "rb") as rf:
+                    params = pickle.load(rf)
+                # filer param keys and adjust formatting
+                clean_params = {}
+                for k,v in params.items():
+                    if not "/" in k:
+                        print(f"Skipping {k}")
+                        continue
+                    if not isinstance(v, dict):
+                        print(f"{k} has no dict")
+                        continue
+                    for n,i in v.items():
+                        clean_params[f"{k}//{n}"] = i
+                self.af2_params = af_utils.flat_params_to_haiku(params=clean_params, fuse=True)
+                # adjust model name
+                self.af2_model_name = "_".join(self.af2_model_name.split("_")[:3])
+            else:
+                self.af2_params = get_model_haiku_params(
+                        model_name=self.af2_model_name,
+                        data_dir=af2_parameter_path.__str__(), fuse=True)
 
 
-        self.af2_num_recycle = af2_num_recycle
-        if af2_multimer is None:
-            self.use_multimer = "multimer" in self.af2_model_name
-        else:
-            self.use_multimer = af2_multimer
-        self.af2_config = model_config(self.af2_model_name)
-        self.af2_config.model.global_config.use_dgram = False
-        self.af2_model = jit(make_predict(
-            make_af2(self.af2_config, use_multimer=self.use_multimer),
-            num_recycle=self.af2_num_recycle))
+            self.af2_num_recycle = af2_num_recycle
+            if af2_multimer is None:
+                self.use_multimer = "multimer" in self.af2_model_name
+            self.af2_config = model_config(self.af2_model_name)
+            self.af2_config.model.global_config.use_dgram = False
+            self.af2_model = jit(make_predict(
+                make_af2(self.af2_config, use_multimer=self.use_multimer),
+                num_recycle=self.af2_num_recycle))
         
         return self.af2_model, self.af2_params
 
