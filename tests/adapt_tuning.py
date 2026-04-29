@@ -10,24 +10,26 @@ out_dir.mkdir()
 config = dict(
     op_dir="./data/adapt/",
     key = Keygen(42),
-    pmpnn_model=None,
-    af2_model=None,
-    af2_params=None,
-    boltz_docking=True,
-    boltz_redocking=False,
-    boltz_parameter_path=Path("./params/boltz"),
-    boltz_model_name="boltz2_conf",
-    boltz_num_recycle = 0,
-    boltz_num_samples = 1,
-    boltz_num_sampling_steps = 25,
-    boltz_deterministic = False,
-    af2_model_name=None,
-    af2_parameter_path=None,
-    af2_multimer=None,
-    af2_num_recycle=0,
-    pmpnn_parameter_path="./params/pmpnn/v_48_020.pkl",
-    pmpnn_hparams={},
-    ab = False,
+    boltz_config = dict(
+        boltz_docking=True,
+        boltz_redocking=False,
+        boltz_parameter_path=Path("./params/boltz"),
+        boltz_model_name="boltz2_conf",
+        boltz_num_recycle = 0,
+        boltz_num_samples = 1,
+        boltz_num_sampling_steps = 25,
+        boltz_deterministic = False,),
+    af2_config = dict(
+        af2_model=None,
+        af2_params=None,
+        af2_model_name=None,
+        af2_parameter_path=None,
+        af2_multimer=None,
+        af2_num_recycle=0,),
+    pmpnn_config = dict(
+        pmpnn_model=None,
+        pmpnn_parameter_path="./params/pmpnn/v_48_020.pkl",
+        pmpnn_hparams={},),
     mhc_chain_index=0,
     tcr_chain_index=(2,3),
     name="tuning",
@@ -58,10 +60,9 @@ n_refine_steps=10
 boltz_sample_range = [1,3,7,10]
 
 scores = []
-for n, af_parameter_path in enumerate(af_parameter_paths):
+for n, af_parameter_path in enumerate(af_parameter_paths[:2]):
     _config = config.copy()
-    _config.update(af2_parameter_path=af_parameter_path)
-    _config.update(af2_parameter_path=af_parameter_path)
+    _config["af2_config"].update(af2_parameter_path=af_parameter_path)
     _config.update(out_dir=out_dir/f"af_params_{af_parameter_path.stem}")
     print(_config)
     for (mhc_allele,antigen) in unique_targets[1:]:
@@ -107,26 +108,26 @@ for n, af_parameter_path in enumerate(af_parameter_paths):
                 scaffold_name=scaffold_name
             )
         scores.append(adapt.get_scores()["score"].min())
-        _config.update(
+        _config["af2_config"].update(
         af2_params = adapt.af2_params,
         af2_model = adapt.af2_model,
         )
-        config.update(
+        config["pmpnn_config"].update(
         pmpnn_model=adapt.pmpnn,
         )
 
 best_af = af_parameter_paths[np.argmin(scores)]
 best_af_score = min(scores)
-config.update(af2_parameter_path=best_af)
+config["af2_config"].update(af2_parameter_path=best_af)
 
 # test boltz vs af in docking
-config.update(boltz_docking=True)
+config["boltz_config"].update(boltz_docking=True)
 boltz_scores = []
 af2_params = None
 af2_model = None
 for n, num_samples in enumerate(boltz_sample_range[:1]):
     _config = config.copy()
-    _config.update(boltz_num_samples=num_samples)
+    _config["boltz_config"].update(boltz_num_samples=num_samples)
     _config.update(out_dir=out_dir/f"boltz_numsamples_{num_samples}")
     print(_config)
     
@@ -177,7 +178,7 @@ for n, num_samples in enumerate(boltz_sample_range[:1]):
             )
         boltz_scores.append(adapt.get_scores()["score"].min())
 
-    _config.update(
+    _config["af2_config"].update(
         af2_params = adapt.af2_params,
         af2_model = adapt.af2_model,
         )

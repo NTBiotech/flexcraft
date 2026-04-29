@@ -191,7 +191,6 @@ class ADAPT:
         ):
 
         config = {
-
             "docking":False,
             "redocking":False,
             "parameter_path":Path("./params/boltz"),
@@ -338,7 +337,7 @@ class ADAPT:
         self.pmpnn_n_per_target = config["pmpnn_n_per_target"]
 
         if self.pmpnn is None:
-            self.pmpnn = jit(make_pmpnn(pmpnn_parameter_path, eps=0.05))
+            self.pmpnn = jit(make_pmpnn(self.pmpnn_parameter_path, eps=0.05))
 
         self.pmpnn_transform = lambda center: transform_logits((
             toggle_transform(
@@ -405,8 +404,7 @@ class ADAPT:
                         data_dir=af2_parameter_path.__str__(), fuse=True)
 
 
-            self.af2_num_recycle = af2_num_recycle
-            if af2_multimer is None:
+            if self.af2_multimer is None:
                 self.use_multimer = "multimer" in self.af2_model_name
             self.af2_config = model_config(self.af2_model_name)
             self.af2_config.model.global_config.use_dgram = False
