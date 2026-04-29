@@ -10,14 +10,17 @@ Notes:
         python setup.py install
         """
 TODO:
+- profile to see pmpnn vs. af
+- add mhc download from allele id
 - add pmpnn hparams
+- add boltz model as input
 (- implement current design attribute)
 '''
 from flexcraft.data.data import DesignData
 from flexcraft.files.pdb import PDBFile
-from flexcraft.structure.af import *
-from flexcraft.structure.metrics import *
-from flexcraft.structure.boltz import *
+from flexcraft.structure.af import AFInput, AFResult, make_predict, make_af2
+from flexcraft.structure.metrics import RMSD
+from flexcraft.structure.boltz import Joltz2, JoltzResult, JoltzPrediction
 from flexcraft.utils import Keygen, parse_options, data_from_protein
 import flexcraft.sequence.aa_codes as aas
 from flexcraft.sequence.aa_codes import AF2_CODE, decode
@@ -25,6 +28,9 @@ from flexcraft.sequence.mpnn import make_pmpnn
 from flexcraft.sequence.sample import *
 
 from colabdesign.af.alphafold.model import utils as af_utils
+from colabdesign.af.alphafold.model.data import get_model_haiku_params
+from colabdesign.af.alphafold.model.config import model_config
+
 from jax._src.pjit import JitWrapped
 import anarci
 
@@ -32,6 +38,8 @@ from pathlib import Path
 from typing import List, Tuple, Optional, Dict, Iterable, Callable
 from datetime import datetime
 
+from jax import jit
+import jax.numpy as jnp
 import numpy as np
 import pandas as pd
 
@@ -63,7 +71,7 @@ class ADAPT:
         af2_model_name:str|None=None,
         af2_parameter_path:str|Path|None=None,
         af2_multimer:bool|None=None,
-        af_num_recycle:int=0,
+        af2_num_recycle:int=0,
         pmpnn_parameter_path:str|None=None,
         pmpnn_hparams:dict={},
         ab:bool = False,
@@ -73,6 +81,7 @@ class ADAPT:
         out_dir:None|str|Path=None,
         trim:bool=True,
         chain_cache_len:int=650, # how long to pad for af
+        redesign_all_cdrs=False,
     ):
         '''
         Initialize ADAPT class for TCR design and refinement.
@@ -96,11 +105,11 @@ class ADAPT:
             af2_model_name:str|None=None, AF2 model name for loading config (and parameters).
             af2_parameter_path:str|Path|None=None, path to AF2 parameter file (.npy)
             af2_multimer:bool|None=None, wether AF2 model is multimer. If None, is infered from model name
-            af_num_recycle:int=0, number of AF2 recycle steps.
+            af2_num_recycle:int=0, number of AF2 recycle steps.
             pmpnn_parameter_path:str|None=None, path to pMPNN parameter file (.pkl).
             pmpnn_hparams:dict={}, pMPNN hyperparameters.
             ab:bool = False, wether to work on Antibodies of TCRs
-            mhc_chain_index:int|Tuple[int]=0, index of MHC chains in DesignData input.
+            mhc_chain_index:int|Tuple[int]=0, index of MHC chains in DesignData input. For antibodies, this denotes the antigen chain index.
                 Is generally infered automatically
             tcr_chain_index:int|Tuple[int]=(2,3), index
             name="AdaptTrial",
@@ -137,6 +146,7 @@ class ADAPT:
             self.out_dir.mkdir()
 
         # map cdr id to start, end tuple (end exclusive)
+        self.redesign_all_cdrs = redesign_all_cdrs
         self.ab = ab
         self.imgt_mapper = {
             "acdr1":(27,38),
@@ -156,7 +166,11 @@ class ADAPT:
                 "hcdr3":(105,117),}
 
         self.trim = trim
-        self.columns=["score","scaffold","in_pool",
+        self.columns=["score","scaffold",
+            "in_pool",
+            "is_ab",
+            "tcr_chain_index",
+            "mhc_chain_index",
             *[
             k for k in self.imgt_mapper.keys()
             ],
@@ -167,7 +181,7 @@ class ADAPT:
         self.columns_default = {"in_pool":True}
         self.scores = self.out_dir/"scores.csv"
         pd.DataFrame(columns=self.columns).to_csv(self.scores, header=True)
-        self.cdr_coords = copy(self.imgt_mapper)
+        self.cdr_coords = self.imgt_mapper.copy()
 
         self.chain_cache_len = chain_cache_len
         # chain indices
@@ -236,8 +250,11 @@ class ADAPT:
         self,
         input_design:DesignData
         ):
-        '''Trim the length of the construct to cache length.'''
+        '''Trim the length of the mhc chains to fit the construct to cache length.'''
         design_length = len(input_design["aa"])
+        if self.ab:
+            print("Trimming antibodies not supported!")
+            return input_design
         if design_length<=self.chain_cache_len:
             return input_design
         trim = ((design_length-self.chain_cache_len)//len(self.mhc_chain_index))+1
@@ -248,8 +265,8 @@ class ADAPT:
         for chain in self.mhc_chain_index:
             print("trim_design chain",chain)
             chain_mask = input_design["chain_index"]==chain
-            if chain_mask.sum()-trim< 200:
-                print("WARNING! trimmed mhc chain to less than 200 AAs! Manual trimming may be necessary.")
+            if (chain_mask.sum()-trim) < 50:
+                print("WARNING! trimmed mhc chain to less than 50 AAs! Manual trimming may be necessary.")
             trim_mask = np.ones(len(input_design["aa"]), dtype=np.bool_)
             chain_end = np.arange(len(chain_mask))[chain_mask][-1]+1
             # trim from the chain end
@@ -315,7 +332,10 @@ class ADAPT:
         ):
 
         # Protein MPNN TODO: add hparams
-        self.pmpnn = jax.jit(make_pmpnn(pmpnn_parameter_path, eps=0.05))
+        if pmpnn_model is None:
+            self.pmpnn = jit(make_pmpnn(pmpnn_parameter_path, eps=0.05))
+        else:
+            self.pmpnn = pmpnn_model
         self.pmpnn_hparams = {
             "temperature":0.1,
             "model_name":'v_48_020',
@@ -339,12 +359,12 @@ class ADAPT:
         af2_model_name:str|None=None,
         af2_parameter_path:str|Path|None=None,
         af2_multimer:bool|None=None,
-        af_num_recycle:int=0,
+        af2_num_recycle:int=0,
         ):
 
         self.af2_model_name = af2_model_name
         self.af2_parameter_path = af2_parameter_path
-        assert (not af2_model_name is None) or (not af_parameter_path is None), ValueError("Specify either model name or parameter path!")
+        assert (not af2_model_name is None) or (not af2_parameter_path is None), ValueError("Specify either model name or parameter path!")
         if self.af2_parameter_path is None:
             self.af2_parameter_path = (self.in_dir/self.af2_model_name).with_suffix(".pkl")
         if self.af2_model_name is None:
@@ -376,16 +396,16 @@ class ADAPT:
                     data_dir=af2_parameter_path.__str__(), fuse=True)
 
 
-        self.af_num_recycle = af_num_recycle
+        self.af2_num_recycle = af2_num_recycle
         if af2_multimer is None:
             self.use_multimer = "multimer" in self.af2_model_name
         else:
             self.use_multimer = af2_multimer
         self.af2_config = model_config(self.af2_model_name)
         self.af2_config.model.global_config.use_dgram = False
-        self.af2_model = jax.jit(make_predict(
+        self.af2_model = jit(make_predict(
             make_af2(self.af2_config, use_multimer=self.use_multimer),
-            num_recycle=self.af_num_recycle))
+            num_recycle=self.af2_num_recycle))
         
         return self.af2_model, self.af2_params
 
@@ -529,6 +549,7 @@ class ADAPT:
             input_design: DesignData, containing predicted structure
             target_mask: np.ndarray|None, if None, all cdrs are redesigned
         '''
+
         input_design, pad_length, target_mask = self.pad_design(input_design, target_mask)
         if target_mask is None:
             # mask all cdrs: use canonical CDR names by chain
@@ -554,7 +575,8 @@ class ADAPT:
         target_aa = np.array(input_design["aa"])
         target_aa[target_mask] = 20
         input_design = input_design.update(aa=jnp.array(target_aa))
-        
+
+        # predict on all aas to calculate center
         logit_center = self.pmpnn(self.key(), input_design)["logits"].mean(axis=0)
         pmpnn_sampler = sample(self.pmpnn, logit_transform=self.pmpnn_transform(logit_center))
 
@@ -603,9 +625,10 @@ class ADAPT:
         is_target:np.ndarray,
         ) -> float:
         '''
-        Calculate the RMSD for CDR3 chains after alignment of mhc chain.
+        Calculate the RMSD for CDR3 chains after alignment of MHC chain. For antibodies, the antigen is used for alignment.
         Args:
             result: AFResult|JoltzResult, result of af prediction. Has inputs and result attribute.
+            input_design: DesignData, original structure before prediction
             is_target: np.ndarray, bool array that is True for all CDR3 positions.
         '''
         # only include MHC in alignment
@@ -621,86 +644,35 @@ class ADAPT:
 
     def design_trial(
         self,
-        scaffold:str|Path|DesignData,
-        cdrs:Dict[str,str],
-        pMHC:str|Path|DesignData|None=None,
-        redesign_all_cdrs:bool=False,
-    ):
+        design:DesignData,
+        scaffold_name:str,
+        cdrs:List[str]|None=None,
+        ):
         '''Run a design step for recombination of TCRs with CDR3s'''
-        # Save original identifiers for output naming
-        scaffold_name = Path(scaffold).stem.split("_")[0] if isinstance(scaffold, (str, Path)) else "scaffold"
-        pmhc_name = Path(pMHC).stem if isinstance(pMHC, (str, Path)) else "pmhc"
-        scaffold_name += "+"+pmhc_name
-        pmhc_is_scaffold = pMHC is None or pMHC == scaffold
         print(
             f"\n!---Design Trial for {scaffold_name}---!\n",
         )
+
+        if cdrs is None:
+            cdrs = ["lcdr3", "hcdr3"] if self.ab else ["acdr3", "bcdr3"]
+
+        # filter ids
+        for cdr in cdrs:
+            if cdr not in self.imgt_mapper.keys():
+                raise KeyError(f"Invalid cdr id {cdr}! Choose one of {[f'{k}, ' for k in self.imgt_mapper.keys()]} or change self.ab.")
+
         # process input
-        if not isinstance(scaffold, DesignData):
-            # load tcr
-            if isinstance(scaffold, str):
-                scaffold = Path(scaffold)
-            if scaffold.parent == self.in_dir:
-                scaffold = PDBFile(path=self.in_dir/scaffold.name).to_data()
-            else:
-                scaffold = PDBFile(path=scaffold).to_data()
-
-        if pmhc_is_scaffold:
-            # check if all chains are present in the single structure
-            assert len(np.unique(scaffold["chain_index"])) >= (len(self.mhc_chain_index) + len(self.tcr_chain_index) + 1), \
-                ValueError(f"No pMHC provided and TCR with incorrect chain number!")
-            design = scaffold
-        else:
-            if not isinstance(pMHC, DesignData):
-                # load pmhc
-                if isinstance(pMHC, str):
-                    pMHC = Path(pMHC)
-                if pMHC.parent == self.in_dir:
-                    pmhc = PDBFile(path=self.in_dir/pMHC.name).to_data()
-                else:
-                    pmhc = PDBFile(path=pMHC).to_data()
-            else:
-                pmhc = pMHC
-            if len(np.unique(pmhc["chain_index"]))>3:
-                pmhc = self.number_anarci(pmhc, trim=False)
-                pmhc = pmhc[(pmhc["chain_index"][:,None] != self.tcr_chain_index[None,:]).any(axis=1)]
-            # concatenate with split_chains
-            design = DesignData.concatenate([pmhc, scaffold], sep_chains=True)
         print_dd(design, "Input")
-        # imgt numbering
-        design = self.number_anarci(design, trim=self.trim)
-        
-        sequences = ({},{})
-        # load cdr
-        for k,v in cdrs.items():
-            if k in self.imgt_mapper:
-                sequences[k.startswith("h") or k.startswith("b")].update({k:v})
 
-        print("CDRs: ", sequences)
-        print_dd(design, "Numbered")
-        design, _ = self.insert_cdr(
-            input_design=design,
-            chain_index=self.tcr_chain_index[0],
-            sequences=sequences[0]
-            )
-        print_dd(design, "Inserted1")
-        design, _ = self.insert_cdr(
-            input_design=design,
-            chain_index=self.tcr_chain_index[1],
-            sequences=sequences[1]
-            )
-        if self.trim:
-            design = self.trim_design(design)
-        print_dd(design, "Inserted")
-
-        if redesign_all_cdrs:
-            pre = ["b","h"][int(self.ab)]
+        # mask cdrs and 
+        pre = ["b","h"][int(self.ab)]
+        if self.redesign_all_cdrs:
             alpha_cdrs = [k for k in self.imgt_mapper.keys() if not k.startswith(pre)]
             beta_cdrs = [k for k in self.imgt_mapper.keys() if k.startswith(pre)]
         else:
-            alpha_cdrs = [k for k in sequences[0].keys()]
-            beta_cdrs = [k for k in sequences[1].keys()]
-        
+            alpha_cdrs = [k for k in cdrs if not k.startswith(pre)]
+            beta_cdrs = [k for k in cdrs if k.startswith(pre)]
+
         target_mask = (
             self.cdr_mask(design, chain_index=self.tcr_chain_index[0], cdr_ids=alpha_cdrs)
             + self.cdr_mask(design, chain_index=self.tcr_chain_index[1], cdr_ids=beta_cdrs)
@@ -745,9 +717,10 @@ class ADAPT:
         print_dd(design, "Redocked")
         print(f"Saving design with score {score} to {file_name}!")
         # Use a named Series so missing CDR1/CDR2 columns get NaN automatically
-        row = {"score": score, "scaffold": scaffold_name,
-                **{cdr:self.get_cdr_seq(design, cdr) for cdr in self.imgt_mapper.keys()},
-                **{f"{k}_coords":v for k, v in self.cdr_coords.items()}}
+        row = {"score": score, "scaffold": scaffold_name, "is_ab":bool(self.ab),
+            "tcr_chain_index":(*[int(i) for i in self.tcr_chain_index],),"mhc_chain_index":(*[int(i) for i in self.mhc_chain_index],),
+            **{cdr:self.get_cdr_seq(design, cdr) for cdr in self.imgt_mapper.keys()},
+            **{f"{k}_coords":v for k, v in self.cdr_coords.items()},}
         print(row)
         self.append_scores(pd.Series(row), file_name)
         return score
@@ -757,9 +730,11 @@ class ADAPT:
         self,
         index:str,
         family:str|None=None
-        ):
+        )->Tuple[DesignData, str]:
         '''
         Query the scores table for a design and adjust the cdr coords.
+        Returns:
+            (DesignData, str, str); design, path to the pdb, family
         '''
         scores = self.get_scores()
         if not family is None:
@@ -774,18 +749,39 @@ class ADAPT:
             row = scores.loc[index]
         if isinstance(row, pd.DataFrame):
             row = row.iloc[0]
+        # load structure descriptors
+        self.ab = row["is_ab"]
+        self.imgt_mapper = {
+            "acdr1":(27,38),
+            "acdr2":(56, 65),
+            "acdr3":(105,117),
+            "bcdr1":(27,38),
+            "bcdr2":(56,65),
+            "bcdr3":(105,117),
+            }
+        if self.ab:
+            self.imgt_mapper = {
+                "lcdr1":(27,38),
+                "lcdr2":(56, 65),
+                "lcdr3":(105,117),
+                "hcdr1":(27,38),
+                "hcdr2":(56,65),
+                "hcdr3":(105,117),}
         to_tuple = lambda s: tuple([int(n) for n in s.strip("()").split(",")])
         self.cdr_coords = {k:to_tuple(row[f"{k}_coords"]) if row[f"{k}_coords"] else self.imgt_mapper[k] for k in self.imgt_mapper.keys()}
+        self.tcr_chain_index = np.array(to_tuple(row["tcr_chain_index"]))
+        self.mhc_chain_index = np.array(to_tuple(row["mhc_chain_index"]))
         design = PDBFile(path=self.out_dir/row.name).to_data()
-        return design, row.name
+        print(f"Loaded Design {row.name} with cdr_coords {self.cdr_coords}!")
+        print_dd(design, "Loaded Design!")
+        return design, row.name, row["scaffold"]
 
 
     def refine_trial(
         self,
-        scaffold:DesignData|str|Path,
-        scaffold_name:str|None=None,
+        scaffold:DesignData,
+        scaffold_name:str,
         cdrs:List[str]|None=None,
-        redesign_all_cdrs:bool=False,
         ):
         if cdrs is None:
             cdrs = ["lcdr3", "hcdr3"] if self.ab else ["acdr3", "bcdr3"]
@@ -797,33 +793,21 @@ class ADAPT:
 
         # fetch list of candidates
         # process input
-        
-        scaffold_name = Path(scaffold).stem.split("_")[0] if isinstance(scaffold, (str, Path)) else scaffold_name
-        if not isinstance(scaffold, DesignData):
-            # load tcr
-            if isinstance(scaffold, str):
-                scaffold = Path(scaffold)
-            if scaffold.parent==self.in_dir:
-                scaffold = scaffold.name
-            scaffold = PDBFile(path=self.in_dir/scaffold).to_data()
+
         print(
-            f"\n!---Design Trial for {scaffold_name}---!\n",
+            f"\n!---Refine Trial for {scaffold_name}---!\n",
         )
         print(f"CDRs: {cdrs}")
-        # imgt numbering
-        print_dd(scaffold, "loaded")
-        scaffold = self.number_anarci(scaffold, trim=self.trim)
-        if self.trim:
-            scaffold = self.trim_design(scaffold)
-        print_dd(scaffold, "trimmed")
+        print_dd(scaffold, "Input")
         # mutate 2 cdr positions
         scaffold, mutated_cdrs = self.mutate_cdrs(
             input_design=scaffold,
             cdrs=cdrs,
             n_mutations=2,
             )
+        print_dd(scaffold, "Mutated")
 
-        if redesign_all_cdrs:
+        if self.redesign_all_cdrs:
             pre = ["b","h"][int(self.ab)]
             alpha_cdrs = [k for k in self.imgt_mapper.keys() if not k.startswith(pre)]
             beta_cdrs = [k for k in self.imgt_mapper.keys() if k.startswith(pre)]
@@ -875,9 +859,10 @@ class ADAPT:
         print_dd(scaffold, "Redocked")
         print(f"Saving design with score {score} to {file_name}!")
         # Use a named Series so missing CDR1/CDR2 columns get NaN automatically
-        row = {"score": score, "scaffold": scaffold_name,
+        row = {"score": score, "scaffold": scaffold_name, "is_ab":bool(self.ab),
+            "tcr_chain_index":(*[int(i) for i in self.tcr_chain_index],),"mhc_chain_index":(*[int(i) for i in self.mhc_chain_index],),
             **{cdr:self.get_cdr_seq(scaffold, cdr) for cdr in self.imgt_mapper.keys()},
-            **{f"{k}_coords":v for k, v in self.cdr_coords.items()}}
+            **{f"{k}_coords":v for k, v in self.cdr_coords.items()},}
 
         # compare to existing
         print("Replacing ",self.compare(file_name,row))
@@ -887,8 +872,8 @@ class ADAPT:
         self,
         file_name:str|Path,
         specs:pd.Series|dict,
-        family_limit:int=10,
-        full_limit:int=20,
+        family_limit:int=2,
+        full_limit:int=5,
         delete_file=False,
     ):
         '''
@@ -912,7 +897,9 @@ class ADAPT:
         else:
             out_name = scores.loc["in_pool"].sort_values("score", ascending=True).iloc[0].name
 
+        print(scores)
         scores.loc[out_name, "in_pool"] = False
+        print(scores)
         print(f"Removing worst design {out_name} and adding {specs}.")
         if delete_file:
             if not isinstance(file_name, Path):
@@ -1109,10 +1096,7 @@ class ADAPT:
         for insert, fw_slice in zip(inserts, fw_slices[1:]):
             parts.append(insert)
             parts.append(input_design[fw_slice])
-        for n,p in enumerate(parts):
-            print_dd(p, n)
         out = DesignData.concatenate(parts, sep_batch=False, sep_chains=False)
-        print_dd(out, "out insert_cdr_concat")
 
         # Attempt to Update residue index with IMGT numbering for the modified chain TODO: still needed?
         if use_imgt_mapper:
@@ -1126,14 +1110,14 @@ class ADAPT:
             # dict tracking dif per cdr
             for k, offset in offsets.items():
                 self.cdr_coords[k] = (
-                    self.cdr_coords[k][0],
-                    self.cdr_coords[k][1]+offset)
+                    int(self.cdr_coords[k][0]),
+                    int(self.cdr_coords[k][1]+offset))
                 # affected downstream cdrs
                 for i_k in self.imgt_mapper.keys():
                     if i_k.startswith(k[0]) and int(i_k[-1])> int(k[-1]):
                         self.cdr_coords[i_k] = (
-                            self.cdr_coords[i_k][0]+offset,
-                            self.cdr_coords[i_k][1]+offset)
+                            int(self.cdr_coords[i_k][0]+offset),
+                            int(self.cdr_coords[i_k][1]+offset))
         cdr_mask = self.cdr_mask(
             input_design=out,
             cdr_ids = [k for k in sequences.keys()],
@@ -1179,12 +1163,15 @@ class ADAPT:
             if numbering[0]:
                 print(f"Classified chain {chain} as {numbering[-1]}.")
                 chain_type = numbering[-1]
-                if chain_type == "A":
-                    print(f"Setting chain {chain} to tcr chain 0!")
+                if chain_type in ["A", "L"]:
+                    print(f"Setting chain {chain} to {chain_type}!")
                     self.tcr_chain_index[0] = chain
-                elif chain_type == "B":
-                    print(f"Setting chain {chain} to tcr chain 1!")
+                elif chain_type in ["B", "H"]:
+                    print(f"Setting chain {chain} to {chain_type}!")
                     self.tcr_chain_index[1] = chain
+                else:
+                    print(f"Unknown chain type {chain_type} of chain {chain}!")
+                    continue
                 # Build IMGT position strings (e.g. "1", "111", "111A") then convert to int
                 numbering = [f"{x[0][0]}{x[0][1].strip()}" for x in numbering[0] if x[1] != "-"]
                 numbering = [int(x) if x.isnumeric() else int(x[:-1]) for x in numbering]
@@ -1208,15 +1195,14 @@ class ADAPT:
                 input_design = input_design.update(residue_index=jnp.array(residue_index))
 
                 # update cdr coords dict
-                pre = [["a", "b"],
-                    ["l", "h"],][self.ab][chain_type=="B"]
+                pre = ["a","b",][chain_type=="B"or chain_type=="H"]
                 chain_mask = np.array(input_design["chain_index"]) == chain
-                for k,v in self.cdr_coords.items():
+                for k in self.imgt_mapper.keys():
                     if k.startswith(pre):
                         print("Configuring cdr_coords for ", k)
                         index = np.arange(chain_mask.sum())
                         mask = (input_design["residue_index"][chain_mask][:, None]==np.arange(*self.imgt_mapper[k])[None,:]).any(axis=1)
-                        self.cdr_coords[k] = (index[mask][0], index[mask][-1]+1)
+                        self.cdr_coords[k] = (int(index[mask][0]), int(index[mask][-1]+1))
                 
             else:
                 print(f"No numbering found for chain {chain}!")
@@ -1234,13 +1220,122 @@ class ADAPT:
             # get chain lengths
             chain_lengths =  (input_design["chain_index"][:,None] == chains[None,:]).sum(axis=0)
             # take the n longest chain indices, where n the number of non-tcr chains -1 (for the peptide chain) 
-            self.mhc_chain_index = np.array(
-                [chains[r]
-                for r in np.argsort(chain_lengths)[:-(len(chains)):-1]]
-            )
-            print(f"Classified chains {self.mhc_chain_index} as MHC chains")
+            if self.ab:
+                # take all non-tcr chains
+                self.mhc_chain_index = np.array(
+                    chains
+                )
+            else:
+                # take all non-tcr-chains except for smalles (peptide, hopefully)
+                self.mhc_chain_index = np.array(
+                    [chains[r]
+                    for r in np.argsort(chain_lengths)[:-(len(chains)):-1]]
+                )
+            print(f"Classified chains {self.mhc_chain_index} as MHC/antigen chains")
         return input_design
 
+    def _convert_input_peptide(self, peptide:DesignData|Path|str|None)->DesignData|None:
+        if isinstance(peptide, (DesignData|None)):
+            return peptide
+
+        elif isinstance(peptide, Path) or Path(peptide).exists():
+            if not peptide.suffix in [".pdb", ".cif"]:
+                peptide = peptide.with_suffix(".pdb")
+            if peptide.parent != self.in_dir:
+                peptide = self.in_dir/peptide
+            return PDBFile(path=peptide).to_data()
+
+        elif isinstance(peptide, str):
+            return DesignData.from_sequence(peptide)
+
+        else:
+            print(f"Unknown format of peptide {peptide}!")
+            return None
+
+    def make_scaffold(
+        self,
+        receptor:DesignData|Path|str,
+        antigen:DesignData|Path|str,
+        presenter:DesignData|Path|str|None=None,
+        cdrs:Dict[str,str]|Path|None=None,
+        is_ab:bool=False,
+        trim:bool=True,
+        replace_antigen:bool=False,
+        ):
+
+        self.ab = is_ab
+        self.imgt_mapper = {
+            "acdr1":(27,38),
+            "acdr2":(56, 65),
+            "acdr3":(105,117),
+            "bcdr1":(27,38),
+            "bcdr2":(56,65),
+            "bcdr3":(105,117),
+            }
+        if self.ab:
+            self.imgt_mapper = {
+                "lcdr1":(27,38),
+                "lcdr2":(56, 65),
+                "lcdr3":(105,117),
+                "hcdr1":(27,38),
+                "hcdr2":(56,65),
+                "hcdr3":(105,117),}
+        receptor_name = Path(receptor).stem.split("_")[0] if isinstance(receptor, (str, Path)) else ""
+        pmhc_name = Path(presenter).stem if isinstance(presenter, (str, Path)) else ""
+        antigen_name = Path(antigen).stem if isinstance(antigen, (str, Path)) else ""
+        scaffold_name = "+".join([receptor_name, pmhc_name, antigen_name])
+        
+        # load all constructs
+        receptor = self._convert_input_peptide(receptor)
+
+        # remove non- (mhc or tcr/ab) chains
+        receptor = self.number_anarci(receptor, trim=False)
+        receptor = receptor[(
+            receptor["chain_index"][:, None]==self.tcr_chain_index[None,:]).any(axis=1)]
+        print_dd(receptor,"Receptor(peptide removed)")
+
+        antigen = self._convert_input_peptide(antigen)
+        presenter = self._convert_input_peptide(presenter)
+        if not presenter is None:
+            presenter = self.number_anarci(presenter, trim=False)
+            presenter = presenter[(
+                presenter["chain_index"][:, None]==self.mhc_chain_index[None,:]
+            ).any(axis=1)]
+
+        scaffold = DesignData.concatenate(
+            [d for d in [receptor, antigen, presenter] if not d is None],
+            sep_chains=True, sep_batch=False
+        )
+        # index with imgt numbering
+        scaffold = self.number_anarci(input_design=scaffold, trim=self.trim)
+
+        if not cdrs is None:
+            # insert the cdrs
+            sequences = ({},{})
+            # load cdr
+            # sort by tcr/ab chain
+            for k,v in cdrs.items():
+                if k in self.imgt_mapper:
+                    sequences[k.startswith("h") or k.startswith("b")].update({k:v})
+
+            print("CDRs: ", sequences)
+
+            scaffold, _ = self.insert_cdr(
+                input_design=scaffold,
+                chain_index=self.tcr_chain_index[0],
+                sequences=sequences[0]
+                )
+            print_dd(scaffold, "Inserted1")
+            scaffold, _ = self.insert_cdr(
+                input_design=scaffold,
+                chain_index=self.tcr_chain_index[1],
+                sequences=sequences[1]
+                )
+        
+        if self.trim:
+            scaffold =  self.trim_design(scaffold)
+        return scaffold, scaffold_name
+    
 
 def load_data(out_dir:str|Path=Path("./data/adapt/input_data"),
     url = "https://zenodo.org/records/17488258/files/",
@@ -1276,7 +1371,7 @@ def load_data(out_dir:str|Path=Path("./data/adapt/input_data"),
                 zip_ref.extractall(out_dir)
 
 
-def print_dd(dd:DesignData, name:str="", keys:list=[]):
+def print_dd(dd:DesignData, name:str="", keys:list=["chain_index"]):
     try:
         print(f"\n---{name}---",
             *[f"{k}:{v}\n\t shape: {v.shape}" for k,v in dd.data.items() if k in keys],
@@ -1302,27 +1397,68 @@ def clean_chothia(file):
                 l = rf.readline()
                 if l.startswith("ATOM"):
                     wf.write(l[:26]+" "+l[27:])
-                elif not l.startswith("HETATM"):
+                elif not l.startswith(("HETATM", "MODEL", "ENDMDL")):
                     wf.write(l)
     return out_path
 
-def download_structure(pdb_id: str, file_format: str = "pdb", output_dir: str = "."):
+def download_structure(pdb_id: str, file_format: str = "biological assembly", out_dir: str = "."):
     """
     Download a structure file from RCSB PDB.
     
-    file_format: 'pdb', 'cif' (mmCIF), or 'bcif' (BinaryCIF)
+    file_format: 'pdb', 'cif' (mmCIF), 'bcif' (BinaryCIF), biological assembly (pdb1.gz) or antibody (.pdb from SAbDab).
     """
-    import requests
+    from urllib.request import urlretrieve
     base_urls = {
+        "biological assembly": f"https://files.rcsb.org/download/{pdb_id.upper()}.pdb1.gz",
         "pdb": f"https://files.rcsb.org/download/{pdb_id.upper()}.pdb",
         "cif": f"https://files.rcsb.org/download/{pdb_id.upper()}.cif",
         "bcif": f"https://models.rcsb.org/{pdb_id.lower()}.bcif",
+        "antibody": f"https://opig.stats.ox.ac.uk/webapps/sabdab-sabpred/sabdab/pdb/{pdb_id.lower()}/?scheme=imgt",
     }
     url = base_urls[file_format]
-    response = requests.get(url)
-    response.raise_for_status()
-
-    suffix = {"pdb": ".pdb", "cif": ".cif", "bcif": ".bcif"}[file_format]
-    out_path = Path(output_dir) / f"{pdb_id.upper()}{suffix}"
-    out_path.write_bytes(response.content)
+    suffix = {"pdb": ".pdb", "cif": ".cif", "bcif": ".bcif", "biological assembly":".pdb.gz" ,"antibody":".pdb"}.get(file_format, ".pdb")
+    out_path = Path(out_dir) / f"{pdb_id.upper()}{suffix}"
+    urlretrieve(url, out_path)
+    print(f"out_path: {out_path}")
+    if out_path.suffix == ".gz":
+        # decompress
+        import gzip
+        import shutil
+        with gzip.open(out_path, 'rb') as f_in:
+            with open(out_path.with_suffix(''), 'wb') as f_out:
+                shutil.copyfileobj(f_in, f_out)
+        print(f"out_path.with_suffix(''): {out_path.with_suffix('')}")
+        return out_path.with_suffix("")
     return out_path
+
+def get_mhc_by_accession(accession, base="https://www.ebi.ac.uk/cgi-bin/ipd/api/allele"):
+    import requests
+    response = requests.get(f"{base}/{accession}")
+    if response.status_code == 200:
+        return response.json()
+    else:
+        print(f"WARNING: response status code: {response.status_code}!")
+        return response.status_code
+
+def query_mhc_by_name(name, base="https://www.ebi.ac.uk/cgi-bin/ipd/api/allele", limit:int=10):
+    import requests
+    params={"query":f"startsWith(name, '{name}')" ,"limit":limit}
+    response = requests.get(f"{base}", params=params)
+    if response.status_code == 200:
+        return response.json()
+    else:
+        print(f"WARNING: response status code: {response.status_code}!")
+        return response.status_code
+
+def get_mhc(accession:str|None=None, name:str|None=None):
+    if accession is None:
+        response = query_mhc_by_name(name, limit=1)
+        if isinstance(response,dict):
+            accession = response["data"][0]["accession"]
+            print(f"Found accession {accession} corresponding to name {name}")
+    if not accession is None:
+        response = get_mhc_by_accession(accession)
+        if isinstance(response,dict):
+            return response["sequence"]["protein"]
+    print(f"No protein found for accession {accession} with name {name}!")
+    return None
