@@ -147,7 +147,6 @@ class ADAPT:
 
         # map cdr id to start, end tuple (end exclusive)
         self.redesign_all_cdrs = redesign_all_cdrs
-        self.ab = ab
         self.imgt_mapper = {
             "acdr1":(27,38),
             "acdr2":(56, 65),
@@ -156,19 +155,9 @@ class ADAPT:
             "bcdr2":(56,65),
             "bcdr3":(105,117),
             }
-        if self.ab:
-            self.imgt_mapper = {
-                "lcdr1":(27,38),
-                "lcdr2":(56, 65),
-                "lcdr3":(105,117),
-                "hcdr1":(27,38),
-                "hcdr2":(56,65),
-                "hcdr3":(105,117),}
-
         self.trim = trim
         self.columns=["score","scaffold",
             "in_pool",
-            "is_ab",
             "tcr_chain_index",
             "mhc_chain_index",
             *[
@@ -252,9 +241,7 @@ class ADAPT:
         ):
         '''Trim the length of the mhc chains to fit the construct to cache length.'''
         design_length = len(input_design["aa"])
-        if self.ab:
-            print("Trimming antibodies not supported!")
-            return input_design
+
         if design_length<=self.chain_cache_len:
             return input_design
         trim = ((design_length-self.chain_cache_len)//len(self.mhc_chain_index))+1
@@ -553,12 +540,9 @@ class ADAPT:
         input_design, pad_length, target_mask = self.pad_design(input_design, target_mask)
         if target_mask is None:
             # mask all cdrs: use canonical CDR names by chain
-            if not self.ab:
-                alpha_cdrs = [f"acdr{n}" for n in range(1, 4)]
-                beta_cdrs = [f"bcdr{n}" for n in range(1, 4)]
-            else:
-                alpha_cdrs = [f"lcdr{n}" for n in range(1, 4)]
-                beta_cdrs = [f"hcdr{n}" for n in range(1, 4)]
+            alpha_cdrs = [f"acdr{n}" for n in range(1, 4)]
+            beta_cdrs = [f"bcdr{n}" for n in range(1, 4)]
+
             target_mask = np.zeros(len(input_design["aa"]))
             target_mask += self.cdr_mask(
                 input_design=input_design,
@@ -654,24 +638,24 @@ class ADAPT:
         )
 
         if cdrs is None:
-            cdrs = ["lcdr3", "hcdr3"] if self.ab else ["acdr3", "bcdr3"]
+            cdrs = ["acdr3", "bcdr3"]
 
         # filter ids
         for cdr in cdrs:
             if cdr not in self.imgt_mapper.keys():
-                raise KeyError(f"Invalid cdr id {cdr}! Choose one of {[f'{k}, ' for k in self.imgt_mapper.keys()]} or change self.ab.")
+                raise KeyError(f"Invalid cdr id {cdr}! Choose one of {[f'{k}, ' for k in self.imgt_mapper.keys()]}.")
 
         # process input
         print_dd(design, "Input")
 
         # mask cdrs and 
-        pre = ["b","h"][int(self.ab)]
+        pre = "b"
         if self.redesign_all_cdrs:
-            alpha_cdrs = [k for k in self.imgt_mapper.keys() if not k.startswith(pre)]
-            beta_cdrs = [k for k in self.imgt_mapper.keys() if k.startswith(pre)]
+            alpha_cdrs = [k for k in self.imgt_mapper.keys() if k.startswith("a")]
+            beta_cdrs = [k for k in self.imgt_mapper.keys() if k.startswith("b")]
         else:
-            alpha_cdrs = [k for k in cdrs if not k.startswith(pre)]
-            beta_cdrs = [k for k in cdrs if k.startswith(pre)]
+            alpha_cdrs = [k for k in cdrs if k.startswith("a")]
+            beta_cdrs = [k for k in cdrs if k.startswith("b")]
 
         target_mask = (
             self.cdr_mask(design, chain_index=self.tcr_chain_index[0], cdr_ids=alpha_cdrs)
@@ -717,7 +701,7 @@ class ADAPT:
         print_dd(design, "Redocked")
         print(f"Saving design with score {score} to {file_name}!")
         # Use a named Series so missing CDR1/CDR2 columns get NaN automatically
-        row = {"score": score, "scaffold": scaffold_name, "is_ab":bool(self.ab),
+        row = {"score": score, "scaffold": scaffold_name,
             "tcr_chain_index":(*[int(i) for i in self.tcr_chain_index],),"mhc_chain_index":(*[int(i) for i in self.mhc_chain_index],),
             **{cdr:self.get_cdr_seq(design, cdr) for cdr in self.imgt_mapper.keys()},
             **{f"{k}_coords":v for k, v in self.cdr_coords.items()},}
@@ -750,23 +734,6 @@ class ADAPT:
         if isinstance(row, pd.DataFrame):
             row = row.iloc[0]
         # load structure descriptors
-        self.ab = row["is_ab"]
-        self.imgt_mapper = {
-            "acdr1":(27,38),
-            "acdr2":(56, 65),
-            "acdr3":(105,117),
-            "bcdr1":(27,38),
-            "bcdr2":(56,65),
-            "bcdr3":(105,117),
-            }
-        if self.ab:
-            self.imgt_mapper = {
-                "lcdr1":(27,38),
-                "lcdr2":(56, 65),
-                "lcdr3":(105,117),
-                "hcdr1":(27,38),
-                "hcdr2":(56,65),
-                "hcdr3":(105,117),}
         to_tuple = lambda s: tuple([int(n) for n in s.strip("()").split(",")])
         self.cdr_coords = {k:to_tuple(row[f"{k}_coords"]) if row[f"{k}_coords"] else self.imgt_mapper[k] for k in self.imgt_mapper.keys()}
         self.tcr_chain_index = np.array(to_tuple(row["tcr_chain_index"]))
@@ -784,12 +751,12 @@ class ADAPT:
         cdrs:List[str]|None=None,
         ):
         if cdrs is None:
-            cdrs = ["lcdr3", "hcdr3"] if self.ab else ["acdr3", "bcdr3"]
+            cdrs = ["acdr3", "bcdr3"]
 
         # filter ids
         for cdr in cdrs:
             if cdr not in self.imgt_mapper.keys():
-                raise KeyError(f"Invalid cdr id {cdr}! Choose one of {[f'{k}, ' for k in self.imgt_mapper.keys()]} or change self.ab.")
+                raise KeyError(f"Invalid cdr id {cdr}! Choose one of {[f'{k}, ' for k in self.imgt_mapper.keys()]}.")
 
         # fetch list of candidates
         # process input
@@ -808,13 +775,11 @@ class ADAPT:
         print_dd(scaffold, "Mutated")
 
         if self.redesign_all_cdrs:
-            pre = ["b","h"][int(self.ab)]
-            alpha_cdrs = [k for k in self.imgt_mapper.keys() if not k.startswith(pre)]
-            beta_cdrs = [k for k in self.imgt_mapper.keys() if k.startswith(pre)]
+            alpha_cdrs = [k for k in self.imgt_mapper.keys() if k.startswith("a")]
+            beta_cdrs = [k for k in self.imgt_mapper.keys() if k.startswith("b")]        
         else:
-            pre = ["b","h"][int(self.ab)]
-            alpha_cdrs = [cdr for cdr in cdrs if not cdr.startswith(pre)]
-            beta_cdrs = [cdr for cdr in cdrs if cdr.startswith(pre)]
+            alpha_cdrs = [cdr for cdr in cdrs if cdr.startswith("a")]
+            beta_cdrs = [cdr for cdr in cdrs if cdr.startswith("b")]
         target_mask = (
             self.cdr_mask(scaffold, chain_index=self.tcr_chain_index[0], cdr_ids=alpha_cdrs)
             + self.cdr_mask(scaffold, chain_index=self.tcr_chain_index[1], cdr_ids=beta_cdrs)
@@ -859,7 +824,7 @@ class ADAPT:
         print_dd(scaffold, "Redocked")
         print(f"Saving design with score {score} to {file_name}!")
         # Use a named Series so missing CDR1/CDR2 columns get NaN automatically
-        row = {"score": score, "scaffold": scaffold_name, "is_ab":bool(self.ab),
+        row = {"score": score, "scaffold": scaffold_name,
             "tcr_chain_index":(*[int(i) for i in self.tcr_chain_index],),"mhc_chain_index":(*[int(i) for i in self.mhc_chain_index],),
             **{cdr:self.get_cdr_seq(scaffold, cdr) for cdr in self.imgt_mapper.keys()},
             **{f"{k}_coords":v for k, v in self.cdr_coords.items()},}
@@ -930,9 +895,8 @@ class ADAPT:
             (DesignData, dict): the input design with mutated cdrs and a dict with the mutated cdrs
         """
         out_cdrs = {}
-        pre = ["b","h"][int(self.ab)]
-        alpha_cdrs = [k for k in self.imgt_mapper.keys() if not k.startswith(pre)]
-        beta_cdrs = [k for k in self.imgt_mapper.keys() if k.startswith(pre)]
+        alpha_cdrs = [k for k in self.imgt_mapper.keys() if k.startswith("a")]
+        beta_cdrs = [k for k in self.imgt_mapper.keys() if k.startswith("b")]
 
         if isinstance(cdrs, str):
             if cdrs == "all":
@@ -1220,17 +1184,11 @@ class ADAPT:
             # get chain lengths
             chain_lengths =  (input_design["chain_index"][:,None] == chains[None,:]).sum(axis=0)
             # take the n longest chain indices, where n the number of non-tcr chains -1 (for the peptide chain) 
-            if self.ab:
-                # take all non-tcr chains
-                self.mhc_chain_index = np.array(
-                    chains
-                )
-            else:
-                # take all non-tcr-chains except for smalles (peptide, hopefully)
-                self.mhc_chain_index = np.array(
-                    [chains[r]
-                    for r in np.argsort(chain_lengths)[:-(len(chains)):-1]]
-                )
+            # take all non-tcr-chains except for smalles (peptide, hopefully)
+            self.mhc_chain_index = np.array(
+                [chains[r]
+                for r in np.argsort(chain_lengths)[:-(len(chains)):-1]]
+            )
             print(f"Classified chains {self.mhc_chain_index} as MHC/antigen chains")
         return input_design
 
@@ -1258,28 +1216,10 @@ class ADAPT:
         antigen:DesignData|Path|str,
         presenter:DesignData|Path|str|None=None,
         cdrs:Dict[str,str]|Path|None=None,
-        is_ab:bool=False,
         trim:bool=True,
         replace_antigen:bool=False,
         ):
 
-        self.ab = is_ab
-        self.imgt_mapper = {
-            "acdr1":(27,38),
-            "acdr2":(56, 65),
-            "acdr3":(105,117),
-            "bcdr1":(27,38),
-            "bcdr2":(56,65),
-            "bcdr3":(105,117),
-            }
-        if self.ab:
-            self.imgt_mapper = {
-                "lcdr1":(27,38),
-                "lcdr2":(56, 65),
-                "lcdr3":(105,117),
-                "hcdr1":(27,38),
-                "hcdr2":(56,65),
-                "hcdr3":(105,117),}
         receptor_name = Path(receptor).stem.split("_")[0] if isinstance(receptor, (str, Path)) else ""
         pmhc_name = Path(presenter).stem if isinstance(presenter, (str, Path)) else ""
         antigen_name = Path(antigen).stem if isinstance(antigen, (str, Path)) else ""
