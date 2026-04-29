@@ -11,10 +11,12 @@ Notes:
         """
 TODO:
 - profile to see pmpnn vs. af
-- add mhc download from allele id
-- add pmpnn hparams
+- boltz msa or template .pdb
 - add boltz model as input
 (- implement current design attribute)
+- design cdrs with salad/boltz
+- add structure templates from canonical tcrs
+
 '''
 from flexcraft.data.data import DesignData
 from flexcraft.files.pdb import PDBFile
@@ -74,6 +76,7 @@ class ADAPT:
         af2_num_recycle:int=0,
         pmpnn_parameter_path:str|None=None,
         pmpnn_hparams:dict={},
+        pmpnn_n_per_target:int=3,
         ab:bool = False,
         mhc_chain_index:int|Tuple[int]=0,
         tcr_chain_index:int|Tuple[int]=(2,3),
@@ -187,6 +190,7 @@ class ADAPT:
             pmpnn_model=pmpnn_model,
             pmpnn_parameter_path=pmpnn_parameter_path,
             pmpnn_hparams=pmpnn_hparams,
+            pmpnn_n_per_target=pmpnn_n_per_target
         )
         
         # AlphaFold
@@ -316,6 +320,7 @@ class ADAPT:
         pmpnn_model:None|JitWrapped=None,
         pmpnn_parameter_path:str|None=None,
         pmpnn_hparams:dict={},
+        pmpnn_n_per_target:int=1
         ):
 
         # Protein MPNN TODO: add hparams
@@ -326,7 +331,6 @@ class ADAPT:
         self.pmpnn_hparams = {
             "temperature":0.1,
             "model_name":'v_48_020',
-            "num_seq_per_target":3,
             "n_edges":48,
             "training_noise":0.2,#Å,
             "center_logits":False,
@@ -339,6 +343,7 @@ class ADAPT:
             forbid("C", aas.PMPNN_CODE),
             norm_logits
         ))
+        self.pmpnn_n_per_target = pmpnn_n_per_target
 
 
     def setup_af2(
@@ -469,6 +474,7 @@ class ADAPT:
         save_structure:bool=False,
         evaluate:bool=False,
         is_target:np.ndarray|None=None,
+        template_path:None|str=None,
         )->List[DesignData]|Tuple[List[DesignData], float]:
         '''
         Predict protein structure using Boltz-2.
@@ -476,6 +482,7 @@ class ADAPT:
             structure: List[DesignData], predicted structure and sequence of the input_design for each sample in self.boltz_num_samples
             score: float, output score if evaluate
         '''
+        chain_index = input_design["chain_index"]
         input_design, pad_length = self.pad_design(input_design=input_design)
         chain_masks = (input_design["chain_index"][None,:] == np.unique(input_design["chain_index"])[:, None])
         boltz_prediction = self.boltz_predictor(
@@ -483,7 +490,9 @@ class ADAPT:
             *[
                 {
                     "sequence": decode(input_design["aa"][c], AF2_CODE),
-                    "kind":"protein"
+                    "kind":"protein",
+                    #"use_msa": False,#template_path is None,
+                    #"template_file":template_path
                 }
                 for c in chain_masks
             ]
@@ -517,13 +526,15 @@ class ADAPT:
                     batch_index=jnp.zeros_like(boltz_result.residue_index),
                     plddt=boltz_result.plddt[n] if len(boltz_result.plddt.shape) == 2 else boltz_result.plddt,)
                     ).untie(),
-                    pad_length,)
+                    pad_length,).update(chain_index=chain_index)
                 for n in range(self.boltz_num_samples)
             ]
         else:
-            out = [self.rm_pad(boltz_result.to_data(), pad_length),]
+            out = [self.rm_pad(boltz_result.to_data(), pad_length).update(chain_index=chain_index),]
         if evaluate:
-            score = self.evaluate_step(result=boltz_result, input_design=input_design, is_target=is_target)
+            if len(out)>1:
+                print("WARNING: evaluate_step currently only accepts one sample!")
+            score = self.evaluate_step(result=out[0], input_design=input_design, is_target=is_target)
             return out, score
         
         return out
@@ -563,11 +574,13 @@ class ADAPT:
         # predict on all aas to calculate center
         logit_center = self.pmpnn(self.key(), input_design)["logits"].mean(axis=0)
         pmpnn_sampler = sample(self.pmpnn, logit_transform=self.pmpnn_transform(logit_center))
+        results = []
+        for n in range(self.pmpnn_n_per_target):
 
-        pmpnn_result, _ = pmpnn_sampler(self.key(), input_design)
-        pmpnn_result = input_design.update(
-            aa=aas.translate(pmpnn_result["aa"], aas.PMPNN_CODE, aas.AF2_CODE))
-        return self.rm_pad(pmpnn_result, pad_length)
+            pmpnn_result, _ = pmpnn_sampler(self.key(), input_design)
+            results.append(self.rm_pad(input_design.update(
+                aa=aas.translate(pmpnn_result["aa"], aas.PMPNN_CODE, aas.AF2_CODE)), pad_length))
+        return results
 
     def evaluate_step(
         self,
@@ -630,15 +643,13 @@ class ADAPT:
         self,
         design:DesignData,
         scaffold_name:str,
-        cdrs:List[str]|None=None,
+        cdrs:List[str]=["acdr3", "bcdr3"],
         ):
         '''Run a design step for recombination of TCRs with CDR3s'''
         print(
             f"\n!---Design Trial for {scaffold_name}---!\n",
         )
 
-        if cdrs is None:
-            cdrs = ["acdr3", "bcdr3"]
 
         # filter ids
         for cdr in cdrs:
@@ -664,41 +675,49 @@ class ADAPT:
 
         # docking step (structure prediction without evaluation)
         if self.boltz_docking:
-            boltz_designs = self.boltz_docking_step(input_design=design)
+            boltz_designs = self.boltz_docking_step(input_design=design, template_path=None)
             design = boltz_designs.pop()
         else:
             design = self.af_docking_step(input_design=design, is_target=target_mask)
 
         print_dd(design, "Docked")
         # redesign step: redesign the CDR positions
-        design = self.design_step(input_design=design, target_mask=target_mask)
-        print_dd(design, "Redesigned")
+        
+        designs = self.design_step(input_design=design, target_mask=target_mask)
+        structures = []
+        scores = []
+        print_dd(designs[0], "Redesigned")
+        for n,design in enumerate(designs):
+
+            # redocking + evaluation step
+            if self.boltz_redocking:
+                design, score = self.boltz_docking_step(
+                    input_design=design,
+                    evaluate=True,
+                    is_target=target_mask,
+                )
+            else:
+                templates = None
+                if self.boltz_docking:
+                    templates = boltz_designs
+                design, score = self.af_docking_step(
+                    input_design=design,
+                    evaluate=True,
+                    is_target=target_mask,
+                    templates=templates,
+                )
+            scores.append(score)
+            structures.append(design)
+        design = structures[np.argmax(scores)]
+        score = max(scores)
+        print_dd(design, "Redocked")
         # save design as unique file name
         file_name = f"{scaffold_name}_0.pdb"
         n = 0
         while (self.out_dir/file_name).exists():
             n += 1
             file_name = f"{scaffold_name}_{n}.pdb"
-        # redocking + evaluation step
-        if self.boltz_redocking:
-            boltz_designs, score = self.boltz_docking_step(
-                input_design=design,
-                evaluate=True,
-                is_target=target_mask,
-                save_structure=file_name,
-            )
-        else:
-            templates = None
-            if self.boltz_docking:
-                templates = boltz_designs
-            design, score = self.af_docking_step(
-                input_design=design,
-                evaluate=True,
-                is_target=target_mask,
-                templates=templates,
-                save_structure=file_name,
-            )
-        print_dd(design, "Redocked")
+        design.save_pdb(self.out_dir/file_name)
         print(f"Saving design with score {score} to {file_name}!")
         # Use a named Series so missing CDR1/CDR2 columns get NaN automatically
         row = {"score": score, "scaffold": scaffold_name,
@@ -734,25 +753,34 @@ class ADAPT:
         if isinstance(row, pd.DataFrame):
             row = row.iloc[0]
         # load structure descriptors
-        to_tuple = lambda s: tuple([int(n) for n in s.strip("()").split(",")])
+        to_tuple = lambda s: tuple([int(n) for n in s.strip("()").split(",") if n])
         self.cdr_coords = {k:to_tuple(row[f"{k}_coords"]) if row[f"{k}_coords"] else self.imgt_mapper[k] for k in self.imgt_mapper.keys()}
         self.tcr_chain_index = np.array(to_tuple(row["tcr_chain_index"]))
         self.mhc_chain_index = np.array(to_tuple(row["mhc_chain_index"]))
+        # loading the file collapses the chain indices
         design = PDBFile(path=self.out_dir/row.name).to_data()
+        design = self.convert_chains(design)
         print(f"Loaded Design {row.name} with cdr_coords {self.cdr_coords}!")
         print_dd(design, "Loaded Design!")
         return design, row.name, row["scaffold"]
 
+    def convert_chains(self, input_design:DesignData):
+        d = {}
+        for x,y in zip(np.sort(np.unique(input_design["chain_index"])), range(len(np.unique(input_design["chain_index"])))):
+            d[int(x)]=int(y)
+        print(d)
+        design = input_design.update(chain_index=jnp.array([d[int(x)] for x in input_design["chain_index"]]))
+        self.tcr_chain_index = np.array([d[int(x)] for x in self.tcr_chain_index])
+        self.mhc_chain_index = np.array([d[int(x)] for x in self.mhc_chain_index])
+        return design
 
     def refine_trial(
         self,
         scaffold:DesignData,
         scaffold_name:str,
-        cdrs:List[str]|None=None,
+        cdrs:List[str]=["acdr3", "bcdr3"],
         ):
-        if cdrs is None:
-            cdrs = ["acdr3", "bcdr3"]
-
+        
         # filter ids
         for cdr in cdrs:
             if cdr not in self.imgt_mapper.keys():
@@ -1196,7 +1224,7 @@ class ADAPT:
         if isinstance(peptide, (DesignData|None)):
             return peptide
 
-        elif isinstance(peptide, Path) or Path(peptide).exists():
+        elif isinstance(peptide, Path):
             if not peptide.suffix in [".pdb", ".cif"]:
                 peptide = peptide.with_suffix(".pdb")
             if peptide.parent != self.in_dir:
@@ -1220,9 +1248,9 @@ class ADAPT:
         replace_antigen:bool=False,
         ):
 
-        receptor_name = Path(receptor).stem.split("_")[0] if isinstance(receptor, (str, Path)) else ""
-        pmhc_name = Path(presenter).stem if isinstance(presenter, (str, Path)) else ""
-        antigen_name = Path(antigen).stem if isinstance(antigen, (str, Path)) else ""
+        receptor_name = Path(receptor).stem.split("_")[0][:10] if isinstance(receptor, (str, Path)) else ""
+        pmhc_name = Path(presenter).stem[:10] if isinstance(presenter, (str, Path)) else ""
+        antigen_name = Path(antigen).stem[:10] if isinstance(antigen, (str, Path)) else ""
         scaffold_name = "+".join([receptor_name, pmhc_name, antigen_name])
         
         # load all constructs
@@ -1237,10 +1265,11 @@ class ADAPT:
         antigen = self._convert_input_peptide(antigen)
         presenter = self._convert_input_peptide(presenter)
         if not presenter is None:
-            presenter = self.number_anarci(presenter, trim=False)
-            presenter = presenter[(
-                presenter["chain_index"][:, None]==self.mhc_chain_index[None,:]
-            ).any(axis=1)]
+            if len(np.unique(presenter["chain_index"]))>2:
+                presenter = self.number_anarci(presenter, trim=False)
+                presenter = presenter[(
+                    presenter["chain_index"][:, None]==self.mhc_chain_index[None,:]
+                ).any(axis=1)]
 
         scaffold = DesignData.concatenate(
             [d for d in [receptor, antigen, presenter] if not d is None],
@@ -1248,6 +1277,7 @@ class ADAPT:
         )
         # index with imgt numbering
         scaffold = self.number_anarci(input_design=scaffold, trim=self.trim)
+        scaffold = self.convert_chains(scaffold)
 
         if not cdrs is None:
             # insert the cdrs
@@ -1321,7 +1351,7 @@ def print_dd(dd:DesignData, name:str="", keys:list=["chain_index"]):
         print("Key not found")
 
 
-def clean_chothia(file):
+def clean_chothia(file)->Path:
     '''Removes annotations, duplicate chains and HETATMs.'''
     if isinstance(file, str):
         file = Path(file)
@@ -1341,7 +1371,7 @@ def clean_chothia(file):
                     wf.write(l)
     return out_path
 
-def download_structure(pdb_id: str, file_format: str = "biological assembly", out_dir: str = "."):
+def download_structure(pdb_id: str, file_format: str = "biological assembly", out_dir: str = ".")->Path:
     """
     Download a structure file from RCSB PDB.
     
@@ -1371,7 +1401,7 @@ def download_structure(pdb_id: str, file_format: str = "biological assembly", ou
         return out_path.with_suffix("")
     return out_path
 
-def get_mhc_by_accession(accession, base="https://www.ebi.ac.uk/cgi-bin/ipd/api/allele"):
+def get_mhc_by_accession(accession, base="https://www.ebi.ac.uk/cgi-bin/ipd/api/allele")->Dict[str,str]|int:
     import requests
     response = requests.get(f"{base}/{accession}")
     if response.status_code == 200:
@@ -1380,7 +1410,7 @@ def get_mhc_by_accession(accession, base="https://www.ebi.ac.uk/cgi-bin/ipd/api/
         print(f"WARNING: response status code: {response.status_code}!")
         return response.status_code
 
-def query_mhc_by_name(name, base="https://www.ebi.ac.uk/cgi-bin/ipd/api/allele", limit:int=10):
+def query_mhc_by_name(name, base="https://www.ebi.ac.uk/cgi-bin/ipd/api/allele", limit:int=10)->Dict[str,str]|int:
     import requests
     params={"query":f"startsWith(name, '{name}')" ,"limit":limit}
     response = requests.get(f"{base}", params=params)
@@ -1390,7 +1420,7 @@ def query_mhc_by_name(name, base="https://www.ebi.ac.uk/cgi-bin/ipd/api/allele",
         print(f"WARNING: response status code: {response.status_code}!")
         return response.status_code
 
-def get_mhc(accession:str|None=None, name:str|None=None):
+def get_mhc(accession:str|None=None, name:str|None=None)->str|None:
     if accession is None:
         response = query_mhc_by_name(name, limit=1)
         if isinstance(response,dict):
