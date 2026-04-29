@@ -822,34 +822,43 @@ class ADAPT:
         print_dd(scaffold, "Docked")
 
         # redesign step: redesign the CDR positions
-        scaffold = self.design_step(input_design=scaffold, target_mask=target_mask)
-        print_dd(scaffold, "Redesigned")
+
+        designs = self.design_step(input_design=scaffold, target_mask=target_mask)
+        print_dd(designs[0], "Redesigned")
+        structures = []
+        scores = []
+        print_dd(designs[0], "Redesigned")
+        for n,design in enumerate(designs):
+
+            # redocking + evaluation step
+            if self.boltz_redocking:
+                design, score = self.boltz_docking_step(
+                    input_design=design,
+                    evaluate=True,
+                    is_target=target_mask,
+                )
+            else:
+                templates = None
+                if self.boltz_docking:
+                    templates = boltz_designs
+                design, score = self.af_docking_step(
+                    input_design=design,
+                    evaluate=True,
+                    is_target=target_mask,
+                    templates=templates,
+                )
+            scores.append(score)
+            structures.append(design)
+        design = structures[np.argmax(scores)]
+        score = max(scores)
+        print_dd(design, "Redocked")
         # save design as unique file name
         file_name = f"{scaffold_name}_0.pdb"
         n = 0
         while (self.out_dir/file_name).exists():
             n += 1
             file_name = f"{scaffold_name}_{n}.pdb"
-        # redocking + evaluation step
-        if self.boltz_redocking:
-            scaffold, score = self.boltz_docking_step(
-                input_design=scaffold,
-                evaluate=True,
-                is_target=target_mask,
-                save_structure=file_name,
-            )
-        else:
-            templates = None
-            if self.boltz_docking:
-                templates = boltz_designs
-            scaffold, score = self.af_docking_step(
-                input_design=scaffold,
-                evaluate=True,
-                is_target=target_mask,
-                templates=templates,
-                save_structure=file_name,
-            )
-        print_dd(scaffold, "Redocked")
+        design.save_pdb(self.out_dir/file_name)
         print(f"Saving design with score {score} to {file_name}!")
         # Use a named Series so missing CDR1/CDR2 columns get NaN automatically
         row = {"score": score, "scaffold": scaffold_name,
