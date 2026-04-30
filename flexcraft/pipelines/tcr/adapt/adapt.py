@@ -10,12 +10,15 @@ Notes:
         python setup.py install
         """
 TODO:
-- add boltz model as input
 - profile to see pmpnn vs. af
 - boltz msa or template .pdb
 (- implement current design attribute)
 - design cdrs with salad/boltz
 - add structure templates from canonical tcrs
+    : get mhc 1 and mhc 2 +tcr structures from pdb
+    : align on mhc
+    : cluster by tcr rmsd 
+    : sample from each cluster for representative binding mode set
 
 '''
 from flexcraft.data.data import DesignData
@@ -29,16 +32,19 @@ from flexcraft.sequence.aa_codes import AF2_CODE, decode
 from flexcraft.sequence.mpnn import make_pmpnn
 from flexcraft.sequence.sample import *
 
+from flexcraft.pipelines.tcr.utils import print_dd
+
 from colabdesign.af.alphafold.model import utils as af_utils
 from colabdesign.af.alphafold.model.data import get_model_haiku_params
 from colabdesign.af.alphafold.model.config import model_config
 
-from jax._src.pjit import JitWrapped
+from jax._src.typing import Array
 import anarci
 
 from pathlib import Path
 from typing import List, Tuple, Optional, Dict, Iterable, Callable
 from datetime import datetime
+import tempfile
 
 from jax import jit
 import jax.numpy as jnp
@@ -58,12 +64,12 @@ class ADAPT:
     def __init__(
         self,
         op_dir:Path|str,
-        key,
+        key:Array,
         boltz_config:dict={},
         af2_config:dict={},
         pmpnn_config:dict={},
-        mhc_chain_index:int|Tuple[int]=0,
-        tcr_chain_index:int|Tuple[int]=(2,3),
+        mhc_chain_index:int|tuple[int]=0,
+        tcr_chain_index:int|tuple[int]=(2,3),
         name="AdaptTrial",
         out_dir:None|str|Path=None,
         trim:bool=True,
@@ -405,11 +411,11 @@ class ADAPT:
 
 
             if self.af2_multimer is None:
-                self.use_multimer = "multimer" in self.af2_model_name
+                self.af2_multimer = "multimer" in self.af2_model_name
             self.af2_config = model_config(self.af2_model_name)
             self.af2_config.model.global_config.use_dgram = False
             self.af2_model = jit(make_predict(
-                make_af2(self.af2_config, use_multimer=self.use_multimer),
+                make_af2(self.af2_config, use_multimer=self.af2_multimer),
                 num_recycle=self.af2_num_recycle))
         
         return self.af2_model, self.af2_params
@@ -419,7 +425,7 @@ class ADAPT:
         '''
         Wrapper for af model, handles non-multimer models.
         '''
-        if not self.use_multimer:
+        if not self.af2_multimer:
             num_chains = len(jnp.unique(af_input.chain_index))
             af_input_masked = af_input.block_diagonal(num_sequences=num_chains)
             af_result: AFResult = self.af2_model(self.af2_params, self.key(), af_input_masked)
@@ -487,27 +493,38 @@ class ADAPT:
         save_structure:bool=False,
         evaluate:bool=False,
         is_target:np.ndarray|None=None,
-        template_path:None|str=None,
+        template:DesignData|None=None,
         )->List[DesignData]|Tuple[List[DesignData], float]:
         '''
         Predict protein structure using Boltz-2.
         Returns:
             structure: List[DesignData], predicted structure and sequence of the input_design for each sample in self.boltz_num_samples
             score: float, output score if evaluate
+            template: DesignData, template with same corresponding chain_index
         '''
         chain_index = input_design["chain_index"]
         input_design, pad_length = self.pad_design(input_design=input_design)
         chain_masks = (input_design["chain_index"][None,:] == np.unique(input_design["chain_index"])[:, None])
+        if not template is None:
+            template_dir = tempfile.gettempdir()
+            template_files = []
+            for chain in np.unique(input_design["chain_index"]):
+
+                template[template["chain_index"]==chain].to_pdb(f"{template_dir}/template_{chain}.pdb")
+                template_files.append(f"{template_dir}/template_{chain}.pdb")
+        else:
+            template_files=np.full(len(chain_masks), None)
+
         boltz_prediction = self.boltz_predictor(
             self.key(), 
             *[
                 {
                     "sequence": decode(input_design["aa"][c], AF2_CODE),
                     "kind":"protein",
-                    #"use_msa": False,#template_path is None,
-                    #"template_file":template_path
+                    "use_msa": template is None,
+                    "template_file":template_path
                 }
-                for c in chain_masks
+                for c, template_path in zip(chain_masks, template_files)
             ]
             )
         if save_structure:
@@ -887,8 +904,8 @@ class ADAPT:
         self,
         file_name:str|Path,
         specs:pd.Series|dict,
-        family_limit:int=2,
-        full_limit:int=5,
+        family_limit:int=10,
+        full_limit:int=20,
         delete_file=False,
     ):
         '''
@@ -906,11 +923,11 @@ class ADAPT:
         scores = self.get_scores()
         family:pd.DataFrame = scores.loc[scores["scaffold"]==specs["scaffold"]]
         if len(family.loc[family["in_pool"]]) > family_limit:
-            out_name = family.loc[family["in_pool"]].sort_values("score", ascending=True).iloc[0].name
+            out_name = family.loc[family["in_pool"]].sort_values("score", ascending=False).iloc[0].name
         elif scores["in_pool"].sum() < full_limit:
             return None
         else:
-            out_name = scores.loc["in_pool"].sort_values("score", ascending=True).iloc[0].name
+            out_name = scores.loc["in_pool"].sort_values("score", ascending=False).iloc[0].name
 
         print(scores)
         scores.loc[out_name, "in_pool"] = False
@@ -1327,130 +1344,3 @@ class ADAPT:
         if self.trim:
             scaffold =  self.trim_design(scaffold)
         return scaffold, scaffold_name
-    
-
-def load_data(out_dir:str|Path=Path("./data/adapt/input_data"),
-    url = "https://zenodo.org/records/17488258/files/",
-    files = [
-        "paired_human_cdr3s.tsv",
-        "model_2_ptm_ft_binder_20230729.pkl",
-        #"RFab_noframework-nosidechains-5-10-23_trainingparamsadded.pt",
-        "zenodo_design_models.zip"
-    ],
-    ):
-    from urllib.request import urlretrieve
-    from zipfile import ZipFile
-    if isinstance(out_dir, str):
-        out_dir = Path(out_dir)
-    if not out_dir.exists():
-        out_dir.mkdir()
-    existing = {x.name for x in out_dir.iterdir() if x.is_file()}
-    for file in files:
-        file_url = url + file
-        print(file_url)
-        if file not in existing:
-            urlretrieve(file_url, str(out_dir/file))
-        else:
-            print(f"{file} exists, skipping download")
-
-        if file.endswith(".zip"):
-            zip_dir = out_dir/file.split(".")[0]
-            print(f"Extracting {file} to {zip_dir}")
-            if zip_dir.exists():
-                print(f"{zip_dir} exists, skipping unzipping {file}")
-                continue
-            with ZipFile(out_dir/file, 'r') as zip_ref:
-                zip_ref.extractall(out_dir)
-
-
-def print_dd(dd:DesignData, name:str="", keys:list=["chain_index"]):
-    try:
-        print(f"\n---{name}---",
-            *[f"{k}:{v}\n\t shape: {v.shape}" for k,v in dd.data.items() if k in keys],
-            sep="\n"
-            )
-    except KeyError:
-        print("Key not found")
-
-
-def clean_chothia(file)->Path:
-    '''Removes annotations, duplicate chains and HETATMs.'''
-    if isinstance(file, str):
-        file = Path(file)
-    if file.name.endswith("clean.pdb"):
-        print("File already clean")
-        return file
-    out_path = Path(file.with_suffix("").__str__()+"_clean.pdb")
-    doubled_chains = []
-    with open(out_path, "w") as wf:
-        with open(file, "r") as rf:
-            l = "init value"
-            while l:
-                l = rf.readline()
-                if l.startswith("ATOM"):
-                    wf.write(l[:26]+" "+l[27:])
-                elif not l.startswith(("HETATM", "MODEL", "ENDMDL")):
-                    wf.write(l)
-    return out_path
-
-def download_structure(pdb_id: str, file_format: str = "biological assembly", out_dir: str = ".")->Path:
-    """
-    Download a structure file from RCSB PDB.
-    
-    file_format: 'pdb', 'cif' (mmCIF), 'bcif' (BinaryCIF), biological assembly (pdb1.gz) or antibody (.pdb from SAbDab).
-    """
-    from urllib.request import urlretrieve
-    base_urls = {
-        "biological assembly": f"https://files.rcsb.org/download/{pdb_id.upper()}.pdb1.gz",
-        "pdb": f"https://files.rcsb.org/download/{pdb_id.upper()}.pdb",
-        "cif": f"https://files.rcsb.org/download/{pdb_id.upper()}.cif",
-        "bcif": f"https://models.rcsb.org/{pdb_id.lower()}.bcif",
-        "antibody": f"https://opig.stats.ox.ac.uk/webapps/sabdab-sabpred/sabdab/pdb/{pdb_id.lower()}/?scheme=imgt",
-    }
-    url = base_urls[file_format]
-    suffix = {"pdb": ".pdb", "cif": ".cif", "bcif": ".bcif", "biological assembly":".pdb.gz" ,"antibody":".pdb"}.get(file_format, ".pdb")
-    out_path = Path(out_dir) / f"{pdb_id.upper()}{suffix}"
-    urlretrieve(url, out_path)
-    print(f"out_path: {out_path}")
-    if out_path.suffix == ".gz":
-        # decompress
-        import gzip
-        import shutil
-        with gzip.open(out_path, 'rb') as f_in:
-            with open(out_path.with_suffix(''), 'wb') as f_out:
-                shutil.copyfileobj(f_in, f_out)
-        print(f"out_path.with_suffix(''): {out_path.with_suffix('')}")
-        return out_path.with_suffix("")
-    return out_path
-
-def get_mhc_by_accession(accession, base="https://www.ebi.ac.uk/cgi-bin/ipd/api/allele")->Dict[str,str]|int:
-    import requests
-    response = requests.get(f"{base}/{accession}")
-    if response.status_code == 200:
-        return response.json()
-    else:
-        print(f"WARNING: response status code: {response.status_code}!")
-        return response.status_code
-
-def query_mhc_by_name(name, base="https://www.ebi.ac.uk/cgi-bin/ipd/api/allele", limit:int=10)->Dict[str,str]|int:
-    import requests
-    params={"query":f"startsWith(name, '{name}')" ,"limit":limit}
-    response = requests.get(f"{base}", params=params)
-    if response.status_code == 200:
-        return response.json()
-    else:
-        print(f"WARNING: response status code: {response.status_code}!")
-        return response.status_code
-
-def get_mhc(accession:str|None=None, name:str|None=None)->str|None:
-    if accession is None:
-        response = query_mhc_by_name(name, limit=1)
-        if isinstance(response,dict):
-            accession = response["data"][0]["accession"]
-            print(f"Found accession {accession} corresponding to name {name}")
-    if not accession is None:
-        response = get_mhc_by_accession(accession)
-        if isinstance(response,dict):
-            return response["sequence"]["protein"]
-    print(f"No protein found for accession {accession} with name {name}!")
-    return None
