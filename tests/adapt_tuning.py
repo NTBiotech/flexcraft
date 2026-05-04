@@ -39,19 +39,19 @@ config = dict(
     chain_cache_len=450, # how long to pad for af
 )
 unique_targets = [
-    ("A*01:01", "EVDPIGHLY"),   # MAGE-A3
     ("A*02:01", "TLMSAMTNL"),   # PAP
-    ("A*02:01", "ALYDKTKRI"),   # TdT
-    ("A*02:01", "GLMWLSYFV"),   # SARS
-    ("A*02:01", "HMTEVVRHC"),   # p53
-    ("A*02:01", "LLWNGPIAV"),   # YFV
-    ("A*03:01", "ALHGGWTTK"),   # PIK3CA
-    ("A*11:01", "VVVGADGVGK"),  # KRAS
-    ("B*44:02", "SEITKQEKDF"),  # PIK3CA
+    #("A*01:01", "EVDPIGHLY"),   # MAGE-A3
+    #("A*02:01", "ALYDKTKRI"),   # TdT
+    #("A*02:01", "GLMWLSYFV"),   # SARS
+    #("A*02:01", "HMTEVVRHC"),   # p53
+    #("A*02:01", "LLWNGPIAV"),   # YFV
+    #("A*03:01", "ALHGGWTTK"),   # PIK3CA
+    #("A*11:01", "VVVGADGVGK"),  # KRAS
+    #("B*44:02", "SEITKQEKDF"),  # PIK3CA
 ]
 #TCR_STRUCTURES = ["4Y1A", "5BS0","8d5q", "2OI9", "5VCJ"]
 TCR_STRUCTURES = ["5BS0",]# "1OGA", "3QDG", "7OW6", "3GSN", "7RRG", "7N2R", "5EU6"]
-AB_STRUCTURES = ["6YIO",]# "7LSG", "7YV1", "7KQL", "7SSC"]
+AB_STRUCTURES = ["7YV1", ]#"6YIO", "7LSG", "7KQL", "7SSC"]
 # test af_parameters
 params_path = Path("./params/af/params")
 af_parameter_paths=[Path("data/adapt/input_data/model_2_ptm_ft_binder_20230729.pkl"),
@@ -66,7 +66,7 @@ for n, af_parameter_path in enumerate(af_parameter_paths[:2]):
     _config["af2_config"].update(af2_parameter_path=af_parameter_path)
     _config.update(out_dir=out_dir/f"af_params_{af_parameter_path.stem}")
     print(_config)
-    for (mhc_allele,antigen) in unique_targets[1:]:
+    for (mhc_allele,antigen) in unique_targets:
         adapt = ADAPT(
             **_config
         )
@@ -135,7 +135,7 @@ for n, num_samples in enumerate(boltz_sample_range[:1]):
     adapt = ADAPT(
         **_config
         )
-    for (mhc_allele,antigen) in unique_targets[1:]:
+    for (mhc_allele,antigen) in unique_targets:
         adapt = ADAPT(
             **_config
         )
