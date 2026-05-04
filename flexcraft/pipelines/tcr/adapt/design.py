@@ -17,6 +17,7 @@ parser.add_argument("--mhc_allele", nargs="*", default=[],)
 parser.add_argument("--binder", nargs="*", default=[],)
 parser.add_argument("--cdrs", type=str, default=None)
 parser.add_argument("--ab", action="store_true")
+parser.add_argument("--out_dir", type=Path, default=None)
 
 
 parser.add_argument("--config", default="./config.json",)
@@ -31,6 +32,8 @@ if __name__ == "__main__":
     peptides = list(args.peptide)
     binders = list(args.binder)
     cdrs_gen = cdr_parser(args.cdrs)
+    if not args.out_dir is None:
+        config.update(out_dir=args.out_dir)
     
     if (len(mhcs)>1) and (len(peptides)>1):
         out_dir = config.get("out_dir", config.get("op_dir", ".")+f"adapt_design_{datetime.now().strftime('%Y-%d-%b_%H:%M:%S')}/")
