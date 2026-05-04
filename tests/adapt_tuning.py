@@ -195,3 +195,5 @@ print(
     *[f'{n}:{s}'for n, s in zip(boltz_sample_range, boltz_scores)],
     f"Best samples: {best_boltz} with score {best_boltz_score}",
 )
+
+print(collect_results(out_dir, pattern="*", save=True).head())

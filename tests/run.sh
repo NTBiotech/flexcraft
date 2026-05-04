@@ -5,7 +5,7 @@
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=2
 #SBATCH --mem=64gb
-#SBATCH --time=00:05:00
+#SBATCH --time=02:00:00
 #SBATCH --gres=gpu:1g.5gb:1
 #SBATCH --output=logs/adapt_tune_%j.out
 #SBATCH --error=logs/adapt_tune_%j.err
