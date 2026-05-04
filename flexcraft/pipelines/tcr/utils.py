@@ -12,6 +12,7 @@ def load_data(out_dir:str|Path=Path("./data/adapt/input_data"),
         "zenodo_design_models.zip"
     ],
     ):
+    '''Load Data used in the original ADAPT paper.'''
     from urllib.request import urlretrieve
     from zipfile import ZipFile
     if isinstance(out_dir, str):
@@ -84,7 +85,6 @@ def download_structure(pdb_id: str, file_format: str = "biological assembly", ou
     suffix = {"pdb": ".pdb", "cif": ".cif", "bcif": ".bcif", "biological assembly":".pdb.gz" ,"antibody":".pdb"}.get(file_format, ".pdb")
     out_path = Path(out_dir) / f"{pdb_id.upper()}{suffix}"
     urlretrieve(url, out_path)
-    print(f"out_path: {out_path}")
     if out_path.suffix == ".gz":
         # decompress
         import gzip
@@ -92,7 +92,6 @@ def download_structure(pdb_id: str, file_format: str = "biological assembly", ou
         with gzip.open(out_path, 'rb') as f_in:
             with open(out_path.with_suffix(''), 'wb') as f_out:
                 shutil.copyfileobj(f_in, f_out)
-        print(f"out_path.with_suffix(''): {out_path.with_suffix('')}")
         return out_path.with_suffix("")
     return out_path
 
@@ -116,6 +115,7 @@ def query_mhc_by_name(name, base="https://www.ebi.ac.uk/cgi-bin/ipd/api/allele",
         return response.status_code
 
 def get_mhc(accession:str|None=None, name:str|None=None)->str|None:
+    '''Query the EBI HLA database for mhc sequence with accession number and/or WHO notation (name).'''
     if accession is None:
         response = query_mhc_by_name(name, limit=1)
         if isinstance(response,dict):
@@ -128,22 +128,61 @@ def get_mhc(accession:str|None=None, name:str|None=None)->str|None:
     print(f"No protein found for accession {accession} with name {name}!")
     return None
 
-def collect_results(directory:Path, pattern:str, out_file:str="scores.csv", save:bool=True):
+def collect_results(directory:Path, pattern:str, in_file:str="scores.csv", save:bool=True):
+    '''Collect result csv files from subdirectories recursively and concatenate to one pandas DataFrame.'''
     import pandas as pd
     scores = {}
     for d in directory.glob(pattern):
         if not d.is_dir():
             continue
-        if (d/out_file).exists():
-            print(d/out_file)
-            scores[d] = pd.read_csv(d/out_file, header=0, index_col=0)
+        if (d/in_file).exists():
+            print(d/in_file)
+            scores[d] = pd.read_csv(d/in_file, header=0, index_col=0)
         else:
-            sub_dir = collect_results(d, pattern="*", out_file=out_file, save=False)
+            sub_dir = collect_results(d, pattern="*", in_file=in_file, save=False)
             if not sub_dir is None:
                 scores[d] = sub_dir
     if not scores:
         return None
     df = pd.concat(scores)
     if save:
-        df.to_csv((directory/(out_file.split(".")[0]+"collected.csv")))
+        df.to_csv((directory/(in_file.split(".")[0]+"collected.csv")))
+        return directory/(in_file.split(".")[0]+"collected.csv")
     return df
+
+def cdr_parser(cdrs:str|None)->Callable:
+    '''
+    Creates a generator for cdr dicts from either an existing path or a json encoded string.
+    Always returns None, if creating the generator fails.
+    '''
+    if cdrs is None:
+        def _inner():
+            return None
+
+    elif Path(cdrs).exists():
+        cdr_file = open(cdrs, "r")
+        keys = cdr_file.readline().strip("\n").split("\t")
+        def _inner():
+            return {
+                    i[-1]+i[:-1]:n
+                    for i,n in zip(keys, cdr_file.readline().strip("\n").split("\t"))
+                }
+    else:
+        try:
+            out = json.loads(cdrs)
+            if isinstance(out, dict):
+                def _inner():
+                    return out
+            elif isinstance(out, list):
+                global cdr_iter
+                cdr_iter=-1
+                def _inner():
+                    global cdr_iter
+                    cdr_iter+=1
+                    return out[cdr_iter]
+        except json.JSONDecodeError:
+            print(f"Not able to interpret cdrs {cdrs}! Returning None!")
+            def _inner():
+                return None
+    
+    return _inner
