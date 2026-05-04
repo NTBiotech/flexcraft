@@ -1,4 +1,6 @@
 from pathlib import Path
+from typing import List, Tuple, Optional, Dict, Iterable, Callable
+
 from flexcraft.data.data import DesignData
 
 def load_data(out_dir:str|Path=Path("./data/adapt/input_data"),
@@ -125,3 +127,23 @@ def get_mhc(accession:str|None=None, name:str|None=None)->str|None:
             return response["sequence"]["protein"]
     print(f"No protein found for accession {accession} with name {name}!")
     return None
+
+def collect_results(directory:Path, pattern:str, out_file:str="scores.csv", save:bool=True):
+    import pandas as pd
+    scores = {}
+    for d in directory.glob(pattern):
+        if not d.is_dir():
+            continue
+        if (d/out_file).exists():
+            print(d/out_file)
+            scores[d] = pd.read_csv(d/out_file, header=0, index_col=0)
+        else:
+            sub_dir = collect_results(d, pattern="*", out_file=out_file, save=False)
+            if not sub_dir is None:
+                scores[d] = sub_dir
+    if not scores:
+        return None
+    df = pd.concat(scores)
+    if save:
+        df.to_csv((directory/(out_file.split(".")[0]+"collected.csv")))
+    return df
