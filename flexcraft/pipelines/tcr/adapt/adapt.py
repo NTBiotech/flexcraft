@@ -167,9 +167,9 @@ class ADAPT:
         self.scores = self.out_dir/"scores.csv"
         self.lock = FileLock(self.scores.with_suffix(".lock"))
         if not (self.scores).exists():
-            lock.aquire()
+            self.lock.acquire()
             pd.DataFrame(columns=self.columns).to_csv(self.scores, header=True)
-            lock.release()
+            self.lock.release()
         else:
             self.columns = list(pd.read_csv(self.scores, header=0, index_col=0).columns)
         self.cdr_coords = self.imgt_mapper.copy()
