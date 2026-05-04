@@ -1,0 +1,30 @@
+{
+"op_dir":"./data/adapt/",
+"key":42,
+"boltz_config":{
+    "boltz_docking":true,
+    "boltz_redocking":false,
+    "boltz_parameter_path":"./params/boltz",
+    "boltz_model_name":"boltz2_conf",
+    "boltz_num_recycle":0,
+    "boltz_num_samples":1,
+    "boltz_num_sampling_steps":25,
+    "boltz_deterministic":false},
+"af2_config":{
+    "af2_model":null,
+    "af2_params":null,
+    "af2_model_name":"params_model_2_multimer_v3",
+    "af2_parameter_path":"./params/af/params/",
+    "af2_multimer":null,
+    "af2_num_recycle":0},
+"pmpnn_config":{
+    "pmpnn_model":null,
+    "pmpnn_parameter_path":"./params/pmpnn/v_48_020.pkl",
+    "pmpnn_hparams":{}},
+"mhc_chain_index":0,
+"tcr_chain_index":[2,3],
+"name":"testing_design",
+"out_dir":null,
+"trim":true,
+"chain_cache_len":450
+}
