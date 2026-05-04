@@ -44,4 +44,3 @@ if __name__ == "__main__":
         )
 
     print(f"Finished design run!\nCollecting results...")
-    print("Collected results at: ",collect_results(Path(adapt.out_dir), pattern=f"**/*{adapt.name}*", save=True))
