@@ -149,6 +149,7 @@ class ADAPT:
             }
         self.trim = trim
         self.columns=["score","scaffold",
+            "time",
             "in_pool",
             "tcr_chain_index",
             "mhc_chain_index",
@@ -755,7 +756,7 @@ class ADAPT:
         design.save_pdb(self.out_dir/file_name)
         print(f"Saving design with score {score} to {file_name}!")
         # Use a named Series so missing CDR1/CDR2 columns get NaN automatically
-        row = {"score": score, "scaffold": scaffold_name,
+        row = {"score": score, "scaffold": scaffold_name, "time":datetime.now().strftime("%Y-%d-%b_%H:%M:%S"),
             "tcr_chain_index":(*[int(i) for i in self.tcr_chain_index],),"mhc_chain_index":(*[int(i) for i in self.mhc_chain_index],),
             **{cdr:self.get_cdr_seq(design, cdr) for cdr in self.imgt_mapper.keys()},
             **{f"{k}_coords":v for k, v in self.cdr_coords.items()},}
@@ -896,7 +897,7 @@ class ADAPT:
         design.save_pdb(self.out_dir/file_name)
         print(f"Saving design with score {score} to {file_name}!")
         # Use a named Series so missing CDR1/CDR2 columns get NaN automatically
-        row = {"score": score, "scaffold": scaffold_name,
+        row = {"score": score, "scaffold": scaffold_name, "time":datetime.now().strftime("%Y-%d-%b_%H:%M:%S"),
             "tcr_chain_index":(*[int(i) for i in self.tcr_chain_index],),"mhc_chain_index":(*[int(i) for i in self.mhc_chain_index],),
             **{cdr:self.get_cdr_seq(scaffold, cdr) for cdr in self.imgt_mapper.keys()},
             **{f"{k}_coords":v for k, v in self.cdr_coords.items()},}
