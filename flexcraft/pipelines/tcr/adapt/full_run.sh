@@ -12,6 +12,23 @@
 # OUT_DIR="./data/adapt/full_run_${current_time}"
 # WD="."
 #
+# with:
+# $ cat $BINDERS
+# "5BS0"	"1OGA"	"3QDG"	"7OW6"	"3GSN"	"7RRG"	"7N2R"	"5EU6"
+# and
+# $ head $CDR_FILE
+# cdr3a   cdr3b
+# CAASFGSNYKLTF   CASSAQSTARYEQYF
+# CALSVGQGGSEKLVF CASTLAREQFF
+# CAASGLGGNEKLTF  CASSPRGRPTDTQYF
+# CAASSSLNYGGSQGNLIF      CASSFAVDRGTYGYTF
+# CAMSASSSNTGKLIF CASSDPSMGAGGDNEQFF
+# CAASSIYSGNQFYF  CSASGVTGTGELFF
+# CIVRVGTSYDKVIF  CASSWVTYEQYF
+# CALLNTNAGKSTF   CSARVTGTTYNEQFF
+# CAVDLSKGAQKLVF  CASRKQEYNEQFF
+# 
+#
 # example ADAPT_CONFIG:
 # {
 # "op_dir":"./data/adapt/",
@@ -43,6 +60,8 @@
 # "trim":true,
 # "chain_cache_len":450
 # }
+
+
 current_time=$(date +"%Y-%m-%d %T")
 
 ADAPT_CONFIG="./adapt_config.json"
@@ -71,10 +90,10 @@ for slice in $(seq 0 $binders_per_task $(($n_binders-1))); do
     binders=${b[@]:$slice:$binders_per_task}
     echo "binders ${binders}"
     if [ "$TYPE" = "ab" ]; then
-        echo "python ./flexcraft/pipelines/tcr/adapt/design.py --config $ADAPT_CONFIG --peptide $PEPTIDE --mhc_allele $MHC_ALLELE --binder $binders --cdrs $CDR_FILE --ab &"
+        python ./flexcraft/pipelines/tcr/adapt/design.py --config $ADAPT_CONFIG --peptide $PEPTIDE --mhc_allele $MHC_ALLELE --binder $binders --cdrs $CDR_FILE --ab &
     fi
     if [ "$TYPE" = "tcr" ]; then
-        echo "python ./flexcraft/pipelines/tcr/adapt/design.py --config $ADAPT_CONFIG --peptide $PEPTIDE --mhc_allele $MHC_ALLELE --binder $binders --cdrs $CDR_FILE &"
+        python ./flexcraft/pipelines/tcr/adapt/design.py --config $ADAPT_CONFIG --peptide $PEPTIDE --mhc_allele $MHC_ALLELE --binder $binders --cdrs $CDR_FILE &
     fi
 done
 # wait for designs to finish
@@ -82,6 +101,6 @@ wait
 
 refine_per_task=$(($N_REFINEMENT / $N_TASKS))
 for n in $(seq $N_TASKS); do
-    echo "python ./flexcraft/pipelines/tcr/adapt/refine.py --designed_dir $OUT_DIR --refine_steps $refine_per_task --cdrs acdr3 bcdr3" &
+    python ./flexcraft/pipelines/tcr/adapt/refine.py --designed_dir $OUT_DIR --refine_steps $refine_per_task --cdrs acdr3 bcdr3 &
 done
 
