@@ -763,7 +763,7 @@ class ADAPT:
         self,
         index:str,
         family:str|None=None
-        )->Tuple[DesignData, str]:
+        )->Tuple[DesignData, str, str]:
         '''
         Query the scores table for a design and adjust the cdr coords.
         Returns:

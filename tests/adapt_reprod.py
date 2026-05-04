@@ -1,4 +1,5 @@
-from flexcraft.pipelines.tcr import *
+from flexcraft.pipelines.tcr.adapt import *
+from flexcraft.pipelines.tcr.utils import *
 from flexcraft.utils.rng import Keygen
 
 from datetime import datetime
