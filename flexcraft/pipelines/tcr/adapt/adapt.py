@@ -64,7 +64,7 @@ class ADAPT:
     def __init__(
         self,
         op_dir:Path|str,
-        key:Array,
+        key:Array|int,
         boltz_config:dict={},
         af2_config:dict={},
         pmpnn_config:dict={},
@@ -161,7 +161,10 @@ class ADAPT:
             ]
         self.columns_default = {"in_pool":True}
         self.scores = self.out_dir/"scores.csv"
-        pd.DataFrame(columns=self.columns).to_csv(self.scores, header=True)
+        if not (self.scores).exists():
+            pd.DataFrame(columns=self.columns).to_csv(self.scores, header=True)
+        else:
+            self.columns = list(pd.read_csv(self.scores, header=0, index_col=0).columns)
         self.cdr_coords = self.imgt_mapper.copy()
 
         self.chain_cache_len = chain_cache_len
@@ -174,13 +177,15 @@ class ADAPT:
             tcr_chain_index = (tcr_chain_index,)
         self.tcr_chain_index = np.array(tcr_chain_index)
         
+        self.key = key
+        if isinstance(self.key, int):
+            self.key = Keygen(self.key)
         
         self.setup_pmpnn(
             **pmpnn_config
         )
         
         # AlphaFold
-        self.key = key
         self.setup_af2(
             **af2_config
         )
@@ -407,7 +412,7 @@ class ADAPT:
             else:
                 self.af2_params = get_model_haiku_params(
                         model_name=self.af2_model_name,
-                        data_dir=af2_parameter_path.__str__(), fuse=True)
+                        data_dir=self.af2_parameter_path.__str__(), fuse=True)
 
 
             if self.af2_multimer is None:
@@ -1283,7 +1288,6 @@ class ADAPT:
         antigen:DesignData|Path|str,
         presenter:DesignData|Path|str|None=None,
         cdrs:Dict[str,str]|Path|None=None,
-        trim:bool=True,
         replace_antigen:bool=False,
         ):
 
