@@ -128,7 +128,7 @@ def get_mhc(accession:str|None=None, name:str|None=None)->str|None:
     print(f"No protein found for accession {accession} with name {name}!")
     return None
 
-def collect_results(directory:Path, pattern:str, in_file:str="scores.csv", save:bool=True):
+def collect_results(directory:Path, pattern="**/*", in_file:str="scores.csv", save:bool=True):
     '''Collect result csv files from subdirectories recursively and concatenate to one pandas DataFrame.'''
     import pandas as pd
     scores = {}
