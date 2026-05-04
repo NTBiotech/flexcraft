@@ -11,24 +11,26 @@ out_dir.mkdir()
 config = dict(
     op_dir="./data/adapt/",
     key = Keygen(42),
-    pmpnn_model=None,
-    af2_model=None,
-    af2_params=None,
-    boltz_docking=True,
-    boltz_redocking=False,
-    boltz_parameter_path=Path("./params/boltz"),
-    boltz_model_name="boltz2_conf",
-    boltz_num_recycle = 0,
-    boltz_num_samples = 1,
-    boltz_num_sampling_steps = 25,
-    boltz_deterministic = False,
-    af2_model_name=None,
-    af2_parameter_path=None,
-    af2_multimer=None,
-    af2_num_recycle=0,
-    pmpnn_parameter_path="./params/pmpnn/v_48_030.pkl",
-    pmpnn_hparams={},
-    ab = False,
+    boltz_config = dict(
+        boltz_docking=True,
+        boltz_redocking=False,
+        boltz_parameter_path=Path("./params/boltz"),
+        boltz_model_name="boltz2_conf",
+        boltz_num_recycle = 0,
+        boltz_num_samples = 1,
+        boltz_num_sampling_steps = 25,
+        boltz_deterministic = False,),
+    af2_config = dict(
+        af2_model=None,
+        af2_params=None,
+        af2_model_name=None,
+        af2_parameter_path=None,
+        af2_multimer=None,
+        af2_num_recycle=0,),
+    pmpnn_config = dict(
+        pmpnn_model=None,
+        pmpnn_parameter_path="./params/pmpnn/v_48_020.pkl",
+        pmpnn_hparams={},),
     mhc_chain_index=0,
     tcr_chain_index=(2,3),
     name="tuning",
@@ -61,7 +63,7 @@ n_design_steps=50
 scores = []
 
 adapt = ADAPT(
-    **_config
+    **config
 )
 for (mhc_allele, antigen) in unique_targets:
     with open("./data/adapt/input_data/paired_human_cdr3s.tsv", "r") as rf:
@@ -84,7 +86,6 @@ for (mhc_allele, antigen) in unique_targets:
                 antigen=antigen,
                 presenter=None if is_ab else scaffold,
                 cdrs=cdrs,
-                is_ab=is_ab,
                 trim=True,
                 replace_antigen=True,
             )
@@ -104,11 +105,10 @@ for (mhc_allele, antigen) in unique_targets:
             scaffold_name=scaffold_name
         )
     scores.append(adapt.get_scores()["score"].min())
-    _config.update(
-    af2_params = adapt.af2_params,
-    af2_model = adapt.af2_model,
-    )
+    
     config.update(
     pmpnn_model=adapt.pmpnn,
     )
+
+print(collect_results(out_dir, pattern="*", save=True))
 

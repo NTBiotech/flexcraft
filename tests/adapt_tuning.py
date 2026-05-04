@@ -61,7 +61,7 @@ n_refine_steps=10
 boltz_sample_range = [1,3,7,10]
 
 scores = []
-for n, af_parameter_path in enumerate(af_parameter_paths[:2]):
+for n, af_parameter_path in enumerate(af_parameter_paths):
     _config = config.copy()
     _config["af2_config"].update(af2_parameter_path=af_parameter_path)
     _config.update(out_dir=out_dir/f"af_params_{af_parameter_path.stem}")
@@ -126,7 +126,7 @@ config["boltz_config"].update(boltz_docking=True)
 boltz_scores = []
 af2_params = None
 af2_model = None
-for n, num_samples in enumerate(boltz_sample_range[:1]):
+for n, num_samples in enumerate(boltz_sample_range):
     _config = config.copy()
     _config["boltz_config"].update(boltz_num_samples=num_samples)
     _config.update(out_dir=out_dir/f"boltz_numsamples_{num_samples}")
@@ -196,4 +196,4 @@ print(
     f"Best samples: {best_boltz} with score {best_boltz_score}",
 )
 
-print(collect_results(out_dir, pattern="*", save=True).head())
+print(collect_results(out_dir, pattern="*", save=True))
