@@ -4,8 +4,8 @@
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=2
-#SBATCH --mem=64gb
-#SBATCH --time=02:00:00
+#SBATCH --mem=20gb
+#SBATCH --time=04:00:00
 #SBATCH --gres=gpu:1g.5gb:1
 #SBATCH --output=logs/adapt_tune_%j.out
 #SBATCH --error=logs/adapt_tune_%j.err
