@@ -33,6 +33,7 @@ from flexcraft.sequence.mpnn import make_pmpnn
 from flexcraft.sequence.sample import *
 
 from flexcraft.pipelines.tcr.utils import print_dd
+from filelock import FileLock
 
 from colabdesign.af.alphafold.model import utils as af_utils
 from colabdesign.af.alphafold.model.data import get_model_haiku_params
@@ -45,6 +46,8 @@ from pathlib import Path
 from typing import List, Tuple, Optional, Dict, Iterable, Callable
 from datetime import datetime
 import tempfile
+
+
 
 from jax import jit
 import jax.numpy as jnp
@@ -162,8 +165,11 @@ class ADAPT:
             ]
         self.columns_default = {"in_pool":True}
         self.scores = self.out_dir/"scores.csv"
+        self.lock = FileLock(self.scores.with_suffix(".lock"))
         if not (self.scores).exists():
+            lock.aquire()
             pd.DataFrame(columns=self.columns).to_csv(self.scores, header=True)
+            lock.release()
         else:
             self.columns = list(pd.read_csv(self.scores, header=0, index_col=0).columns)
         self.cdr_coords = self.imgt_mapper.copy()
@@ -238,15 +244,19 @@ class ADAPT:
             self.boltz_model_name = None
 
     def get_scores(self):
-        return pd.read_csv(self.scores, header=0, index_col=0)
+        with self.lock:
+            out = pd.read_csv(self.scores, header=0, index_col=0)
+        return out
     def write_scores(self, scores:pd.DataFrame):
-        return scores[self.columns].to_csv(self.scores, header=True)
+        with self.lock:
+            scores[self.columns].to_csv(self.scores, header=True)
     def append_scores(self, row:pd.Series, name:str|None=None):
-        for c in self.columns:
-            if c not in row.index:
-                row[c] = self.columns_default.get(c, None)
-        row.name = name
-        return row.to_frame().T[self.columns].to_csv(self.scores, header=False, mode="a")
+        with self.lock:
+            for c in self.columns:
+                if c not in row.index:
+                    row[c] = self.columns_default.get(c, None)
+            row.name = name
+            row.to_frame().T[self.columns].to_csv(self.scores, header=False, mode="a")
 
     def trim_design(
         self,
@@ -775,7 +785,8 @@ class ADAPT:
         Returns:
             (DesignData, str, str); design, path to the pdb, family
         '''
-        scores = self.get_scores()
+        with self.lock:
+            scores = self.get_scores()
         if not family is None:
             scores = scores.loc[scores["scaffold"]==family]
         if index=="random":
@@ -925,27 +936,28 @@ class ADAPT:
         if isinstance(specs, dict):
             specs = pd.Series(specs)
         # add to pool and remove worst performing
-        self.append_scores(specs, file_name)
-        scores = self.get_scores()
-        family:pd.DataFrame = scores.loc[scores["scaffold"]==specs["scaffold"]]
-        if len(family.loc[family["in_pool"]]) > family_limit:
-            out_name = family.loc[family["in_pool"]].sort_values("score", ascending=False).iloc[0].name
-        elif scores["in_pool"].sum() < full_limit:
-            return None
-        else:
-            out_name = scores.loc["in_pool"].sort_values("score", ascending=False).iloc[0].name
+        with self.lock:
+            self.append_scores(specs, file_name)
+            scores = self.get_scores()
+            family:pd.DataFrame = scores.loc[scores["scaffold"]==specs["scaffold"]]
+            if len(family.loc[family["in_pool"]]) > family_limit:
+                out_name = family.loc[family["in_pool"]].sort_values("score", ascending=False).iloc[0].name
+            elif scores["in_pool"].sum() < full_limit:
+                return None
+            else:
+                out_name = scores.loc["in_pool"].sort_values("score", ascending=False).iloc[0].name
 
-        print(scores)
-        scores.loc[out_name, "in_pool"] = False
-        print(scores)
-        print(f"Removing worst design {out_name} and adding {specs}.")
-        if delete_file:
-            if not isinstance(file_name, Path):
-                out_name = Path(out_name)
-            if out_name.parent != self.out_dir:
-                out_name = self.out_dir/out_name
-            out_name.unlink()
-        self.write_scores(scores)
+            print(scores)
+            scores.loc[out_name, "in_pool"] = False
+            print(scores)
+            print(f"Removing worst design {out_name} and adding {specs}.")
+            if delete_file:
+                if not isinstance(file_name, Path):
+                    out_name = Path(out_name)
+                if out_name.parent != self.out_dir:
+                    out_name = self.out_dir/out_name
+                out_name.unlink()
+            self.write_scores(scores)
         return out_name
 
 
