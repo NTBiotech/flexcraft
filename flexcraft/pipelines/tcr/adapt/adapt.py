@@ -919,7 +919,7 @@ class ADAPT:
         file_name:str|Path,
         specs:pd.Series|dict,
         family_limit:int=10,
-        full_limit:int=20,
+        full_limit:int=400,
         delete_file=False,
     ):
         '''
@@ -938,11 +938,14 @@ class ADAPT:
             scores = self.get_scores()
             family:pd.DataFrame = scores.loc[scores["scaffold"]==specs["scaffold"]]
             if len(family.loc[family["in_pool"]]) > family_limit:
+                # if family limit reached, drop least score
                 out_name = family.loc[family["in_pool"]].sort_values("score", ascending=False).iloc[0].name
             elif scores["in_pool"].sum() < full_limit:
+                # if limit not reached dont drop any
                 return None
             else:
-                out_name = scores.loc["in_pool"].sort_values("score", ascending=False).iloc[0].name
+                # remove least performing
+                out_name = scores.sort_values("score", ascending=False).iloc[0].name
 
             print(scores)
             scores.loc[out_name, "in_pool"] = False
@@ -1297,14 +1300,17 @@ class ADAPT:
         receptor:DesignData|Path|str,
         antigen:DesignData|Path|str,
         presenter:DesignData|Path|str|None=None,
-        cdrs:Dict[str,str]|Path|None=None,
+        cdrs:Dict[str,str]|None=None,
         replace_antigen:bool=False,
         ):
 
         receptor_name = Path(receptor).stem.split("_")[0][:10] if isinstance(receptor, (str, Path)) else ""
         pmhc_name = Path(presenter).stem[:10] if isinstance(presenter, (str, Path)) else ""
         antigen_name = Path(antigen).stem[:10] if isinstance(antigen, (str, Path)) else ""
-        scaffold_name = "+".join([receptor_name, pmhc_name, antigen_name])
+        l = [receptor_name, pmhc_name, antigen_name,]
+        if not cdrs is None:
+            l+=[seq[:10] if len(seq)>10 else seq for seq in cdrs.values()]
+        scaffold_name = "+".join(l)
         
         # load all constructs
         receptor = self._convert_input_peptide(receptor)
