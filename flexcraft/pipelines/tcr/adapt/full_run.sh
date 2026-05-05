@@ -3,6 +3,7 @@
 #
 # example RUN_CONFIG:
 # N_TASKS=2
+# N_DESIGN=50
 # N_REFINEMENT=100
 # PEPTIDE="TLMSAMTNL"
 # MHC_ALLELE="A*02:01"
@@ -71,36 +72,49 @@ source $RUN_CONFIG
 cd $WD
 mkdir $OUT_DIR
 
-source ~/.bashrc
-conda init
-conda activate $CONDA_ENV
-module load devel/cuda/12.9
-
 # launch designers for all binders
 # define array b as binder list
 IFS=$'\t' read -ra b <  "$BINDERS"
 n_binders=${#b[@]}
 
 binders_per_task=$(($n_binders / $N_TASKS))
+# if less binders than tasks set one task per binder
+if [ $binders_per_task -le 0 ]; then
+    binders_per_task=1
+fi
 echo "binders_per_task $binders_per_task"
 
+designs_per_binder=$(($N_DESIGN / $n_binders))
+
+pids=()
 
 for slice in $(seq 0 $binders_per_task $(($n_binders-1))); do
     echo "slice ${slice}"
     binders=${b[@]:$slice:$binders_per_task}
     echo "binders ${binders}"
     if [ "$TYPE" = "ab" ]; then
-        python ./flexcraft/pipelines/tcr/adapt/design.py --config $ADAPT_CONFIG --peptide $PEPTIDE --mhc_allele $MHC_ALLELE --binder $binders --cdrs $CDR_FILE --ab --out_dir $OUT_DIR &
+        python ./flexcraft/pipelines/tcr/adapt/design.py --config $ADAPT_CONFIG --peptide $PEPTIDE --mhc_allele $MHC_ALLELE --binder $binders --cdrs $CDR_FILE --ab --out_dir $OUT_DIR --random_cdr --design_steps $designs_per_binder &
     fi
     if [ "$TYPE" = "tcr" ]; then
-        python ./flexcraft/pipelines/tcr/adapt/design.py --config $ADAPT_CONFIG --peptide $PEPTIDE --mhc_allele $MHC_ALLELE --binder $binders --cdrs $CDR_FILE --out_dir $OUT_DIR &
+        python ./flexcraft/pipelines/tcr/adapt/design.py --config $ADAPT_CONFIG --peptide $PEPTIDE --mhc_allele $MHC_ALLELE --binder $binders --cdrs $CDR_FILE --out_dir $OUT_DIR --random_cdr --design_steps $designs_per_binder &
     fi
+    pids+=("$!")
 done
 # wait for designs to finish
-wait
-
-refine_per_task=$(($N_REFINEMENT / $N_TASKS))
-for n in $(seq $N_TASKS); do
-    python ./flexcraft/pipelines/tcr/adapt/refine.py --designed_dir $OUT_DIR --refine_steps $refine_per_task --cdrs acdr3 bcdr3  --config $ADAPT_CONFIG &
+for pid in ${pids[*]}; do
+    wait $pid
 done
 
+pids=()
+
+refine_per_task=$(($N_REFINEMENT / $N_TASKS))
+echo "refinements per task: ${refine_per_task}"
+for n in $(seq $N_TASKS); do
+    echo "Refine task ${n}..."
+    python ./flexcraft/pipelines/tcr/adapt/refine.py --designed_dir $OUT_DIR --refine_steps $refine_per_task --cdrs acdr3 bcdr3  --config $ADAPT_CONFIG &
+    pids+=("$!")
+done
+# wait for refinement to finish
+for pid in ${pids[*]}; do
+    wait $pid
+done
