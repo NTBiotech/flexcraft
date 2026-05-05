@@ -20,26 +20,26 @@ parser.add_argument("--config", default="./config.json",)
 args = parser.parse_args()
 
 
-if __name__ == "__main__":
 
-    config = json.load(open(args.config, "r"))
-    # check if subdirs exist
-    out_dir = args.designed_dir
-    if not (out_dir/"scores.csv").exists():
-        raise FileNotFoundError(f"No scores.csv in designed_dir {out_dir}!")
-    config.update(out_dir=out_dir)
-    adapt = ADAPT(
-    **config
+config = json.load(open(args.config, "r"))
+# check if subdirs exist
+out_dir = args.designed_dir
+if not (out_dir/"scores.csv").exists():
+    raise FileNotFoundError(f"No scores.csv in designed_dir {out_dir}!")
+config.update(out_dir=out_dir)
+adapt = ADAPT(
+**config
+)
+print(f"Refining for {args.refine_steps} steps.")
+for n in range(args.refine_steps):
+    design, pdb_path, design_name = adapt.get_design(
+        index="random"
     )
-    for n in range(args.refine_steps):
-        design, pdb_path, design_name = adapt.get_design(
-            index="random"
-        )
 
-        adapt.refine_trial(
-            scaffold=design,
-            scaffold_name=design_name,
-            cdrs=list(args.cdrs)
-        )
+    adapt.refine_trial(
+        scaffold=design,
+        scaffold_name=design_name,
+        cdrs=list(args.cdrs)
+    )
 
-    print(f"Finished design run!")
+print(f"Finished design run!")

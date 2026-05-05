@@ -150,11 +150,14 @@ def collect_results(directory:Path, pattern="**/*", in_file:str="scores.csv", sa
         return directory/(in_file.split(".")[0]+"collected.csv")
     return df
 
-def cdr_parser(cdrs:str|None)->Callable:
+def cdr_parser(cdrs:str|None, random:bool=False)->Callable:
     '''
     Creates a generator for cdr dicts from either an existing path or a json encoded string.
     Always returns None, if creating the generator fails.
     '''
+    import json
+    if random:
+        from numpy import random as nprandom
     if cdrs is None:
         def _inner():
             return None
@@ -162,11 +165,22 @@ def cdr_parser(cdrs:str|None)->Callable:
     elif Path(cdrs).exists():
         cdr_file = open(cdrs, "r")
         keys = cdr_file.readline().strip("\n").split("\t")
-        def _inner():
-            return {
-                    i[-1]+i[:-1]:n
-                    for i,n in zip(keys, cdr_file.readline().strip("\n").split("\t"))
-                }
+        if random:
+            file_size = Path(cdrs).stat().st_size
+            def _inner():
+                # set the pointer at random position (-200 as buffer from file end)
+                cdr_file.seek(nprandom.randint(0,file_size-200), 0)
+                cdr_file.readline()
+                return {
+                        i[-1]+i[:-1]:n
+                        for i,n in zip(keys, cdr_file.readline().strip("\n").split("\t"))
+                    }
+        else:
+            def _inner():
+                return {
+                        i[-1]+i[:-1]:n
+                        for i,n in zip(keys, cdr_file.readline().strip("\n").split("\t"))
+                    }
     else:
         try:
             out = json.loads(cdrs)
@@ -176,10 +190,14 @@ def cdr_parser(cdrs:str|None)->Callable:
             elif isinstance(out, list):
                 global cdr_iter
                 cdr_iter=-1
-                def _inner():
-                    global cdr_iter
-                    cdr_iter+=1
-                    return out[cdr_iter]
+                if random:
+                    def _inner():
+                        return out[nprandom.randint(0,len(out))]
+                else:
+                    def _inner():
+                        global cdr_iter
+                        cdr_iter+=1
+                        return out[cdr_iter]
         except json.JSONDecodeError:
             print(f"Not able to interpret cdrs {cdrs}! Returning None!")
             def _inner():
