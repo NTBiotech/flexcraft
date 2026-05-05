@@ -1,7 +1,6 @@
 from pathlib import Path
 from typing import List, Tuple, Optional, Dict, Iterable, Callable
 
-from flexcraft.data.data import DesignData
 
 def load_data(out_dir:str|Path=Path("./data/adapt/input_data"),
     url = "https://zenodo.org/records/17488258/files/",
@@ -38,7 +37,8 @@ def load_data(out_dir:str|Path=Path("./data/adapt/input_data"),
                 zip_ref.extractall(out_dir)
 
 
-def print_dd(dd:DesignData, name:str="", keys:list=["chain_index"]):
+def print_dd(dd, name:str="", keys:list=["chain_index"]):
+    '''Print configurable attributes of the DesignData object dd'''
     try:
         print(f"\n---{name}---",
             *[f"{k}:{v}\n\t shape: {v.shape}" for k,v in dd.data.items() if k in keys],
