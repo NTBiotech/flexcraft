@@ -37,6 +37,8 @@ if __name__ == "__main__":
     
     if (len(mhcs)>1) and (len(peptides)>1):
         out_dir = config.get("out_dir", config.get("op_dir", ".")+f"adapt_design_{datetime.now().strftime('%Y-%d-%b_%H:%M:%S')}/")
+        if not out_dir.exists():
+            out_dir.mkdir()
     
     for mhc, peptide in zip(mhcs, peptides):
         if (len(mhcs)>1) and (len(peptides)>1):
@@ -53,16 +55,16 @@ if __name__ == "__main__":
             print(f"Using Binder {binder}...")
             if len(binder)==4:
                 # assume pdb id
-                binder_path = download_structure(
+                binder = download_structure(
                     binder,
                     file_format="antibody" if args.ab else "biological assembly",
                     out_dir=config["op_dir"]+"input_data"
                 )
             # else assume pdb path
-            binder_path = clean_chothia(binder_path)
-            
-            cdrs = cdrs_gen()
+            binder_path = clean_chothia(binder)
 
+            cdrs = cdrs_gen()
+            print(binder_path,mhc_seq,peptide,sep="\n")
             scaffold, scaffold_name = adapt.make_scaffold(
                 receptor=binder_path,
                 presenter=mhc_seq,

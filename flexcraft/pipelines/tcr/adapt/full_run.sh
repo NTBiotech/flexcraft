@@ -8,13 +8,13 @@
 # MHC_ALLELE="A*02:01"
 # BINDERS="./data/adapt/input_data/binders_tcr.tsv"
 # CDR_FILE="./data/adapt/input_data/paired_human_cdr3s.tsv"
-# TYPE="ab"
+# TYPE="tcr"
 # OUT_DIR="./data/adapt/full_run_${current_time}"
 # WD="."
 #
 # with:
 # $ cat $BINDERS
-# "5BS0"	"1OGA"	"3QDG"	"7OW6"	"3GSN"	"7RRG"	"7N2R"	"5EU6"
+# 5BS0	1OGA	3QDG
 # and
 # $ head $CDR_FILE
 # cdr3a   cdr3b
@@ -62,7 +62,7 @@
 # }
 
 
-current_time=$(date +"%Y-%m-%d %T")
+current_time=$(date +"%Y-%m-%d_%H:%M:%S")
 
 ADAPT_CONFIG="./adapt_config.json"
 RUN_CONFIG="./run_config.sh"
@@ -72,9 +72,9 @@ cd $WD
 mkdir $OUT_DIR
 
 source ~/.bashrc
-#conda init
-#conda activate flexcraft
-#module load devel/cuda/12.9
+conda init
+conda activate $CONDA_ENV
+module load devel/cuda/12.9
 
 # launch designers for all binders
 # define array b as binder list
@@ -90,10 +90,10 @@ for slice in $(seq 0 $binders_per_task $(($n_binders-1))); do
     binders=${b[@]:$slice:$binders_per_task}
     echo "binders ${binders}"
     if [ "$TYPE" = "ab" ]; then
-        python ./flexcraft/pipelines/tcr/adapt/design.py --config $ADAPT_CONFIG --peptide $PEPTIDE --mhc_allele $MHC_ALLELE --binder $binders --cdrs $CDR_FILE --ab &
+        python ./flexcraft/pipelines/tcr/adapt/design.py --config $ADAPT_CONFIG --peptide $PEPTIDE --mhc_allele $MHC_ALLELE --binder $binders --cdrs $CDR_FILE --ab --out_dir $OUT_DIR &
     fi
     if [ "$TYPE" = "tcr" ]; then
-        python ./flexcraft/pipelines/tcr/adapt/design.py --config $ADAPT_CONFIG --peptide $PEPTIDE --mhc_allele $MHC_ALLELE --binder $binders --cdrs $CDR_FILE &
+        python ./flexcraft/pipelines/tcr/adapt/design.py --config $ADAPT_CONFIG --peptide $PEPTIDE --mhc_allele $MHC_ALLELE --binder $binders --cdrs $CDR_FILE --out_dir $OUT_DIR &
     fi
 done
 # wait for designs to finish
@@ -101,6 +101,6 @@ wait
 
 refine_per_task=$(($N_REFINEMENT / $N_TASKS))
 for n in $(seq $N_TASKS); do
-    python ./flexcraft/pipelines/tcr/adapt/refine.py --designed_dir $OUT_DIR --refine_steps $refine_per_task --cdrs acdr3 bcdr3 &
+    python ./flexcraft/pipelines/tcr/adapt/refine.py --designed_dir $OUT_DIR --refine_steps $refine_per_task --cdrs acdr3 bcdr3  --config $ADAPT_CONFIG &
 done
 
