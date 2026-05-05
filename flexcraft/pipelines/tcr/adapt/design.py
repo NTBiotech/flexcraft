@@ -63,7 +63,7 @@ for mhc, peptide in zip(mhcs, peptides):
             )
         # else assume pdb path
         binder_path = clean_chothia(binder)
-        print(binder_path,mhc_seq,peptide,sep="\n")
+        print("Components: ",binder_path,mhc_seq,peptide,sep="\n")
 
         for n in range(args.design_steps):
             print(f"\nDesign step {n}")

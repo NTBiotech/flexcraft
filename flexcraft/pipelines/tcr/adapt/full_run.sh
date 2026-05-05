@@ -3,7 +3,7 @@
 #
 # example RUN_CONFIG:
 # N_TASKS=2
-# N_DESIGN=50
+# N_DESIGN=50 -> designs per binder
 # N_REFINEMENT=100
 # PEPTIDE="TLMSAMTNL"
 # MHC_ALLELE="A*02:01"
@@ -72,6 +72,10 @@ source $RUN_CONFIG
 cd $WD
 mkdir $OUT_DIR
 
+module load devel/cuda/12.9
+conda init
+conda activate $CONDA_ENV
+
 # launch designers for all binders
 # define array b as binder list
 IFS=$'\t' read -ra b <  "$BINDERS"
@@ -84,7 +88,6 @@ if [ $binders_per_task -le 0 ]; then
 fi
 echo "binders_per_task $binders_per_task"
 
-designs_per_binder=$(($N_DESIGN / $n_binders))
 
 pids=()
 
@@ -92,11 +95,18 @@ for slice in $(seq 0 $binders_per_task $(($n_binders-1))); do
     echo "slice ${slice}"
     binders=${b[@]:$slice:$binders_per_task}
     echo "binders ${binders}"
+    # todo apply to different gpu configs
+    if [ $(($slice%$(($binders_per_task*2)))) ]; then
+        export CUDA_VISIBLE_DEVICES=1
+    else
+        export CUDA_VISIBLE_DEVICES=0
+    fi
+    
     if [ "$TYPE" = "ab" ]; then
-        python ./flexcraft/pipelines/tcr/adapt/design.py --config $ADAPT_CONFIG --peptide $PEPTIDE --mhc_allele $MHC_ALLELE --binder $binders --cdrs $CDR_FILE --ab --out_dir $OUT_DIR --random_cdr --design_steps $designs_per_binder &
+        python ./flexcraft/pipelines/tcr/adapt/design.py --config $ADAPT_CONFIG --peptide $PEPTIDE --mhc_allele $MHC_ALLELE --binder $binders --cdrs $CDR_FILE --ab --out_dir $OUT_DIR --random_cdr --design_steps $N_DESIGN &
     fi
     if [ "$TYPE" = "tcr" ]; then
-        python ./flexcraft/pipelines/tcr/adapt/design.py --config $ADAPT_CONFIG --peptide $PEPTIDE --mhc_allele $MHC_ALLELE --binder $binders --cdrs $CDR_FILE --out_dir $OUT_DIR --random_cdr --design_steps $designs_per_binder &
+        python ./flexcraft/pipelines/tcr/adapt/design.py --config $ADAPT_CONFIG --peptide $PEPTIDE --mhc_allele $MHC_ALLELE --binder $binders --cdrs $CDR_FILE --out_dir $OUT_DIR --random_cdr --design_steps $N_DESIGN &
     fi
     pids+=("$!")
 done
