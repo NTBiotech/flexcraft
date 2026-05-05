@@ -15,7 +15,6 @@ parser.add_argument("--designed_dir", type=Path)
 parser.add_argument("--refine_steps", type=int, default=100)
 parser.add_argument("--cdrs", nargs="*")
 
-
 parser.add_argument("--config", default="./config.json",)
 
 args = parser.parse_args()
@@ -43,4 +42,4 @@ if __name__ == "__main__":
             cdrs=list(args.cdrs)
         )
 
-    print(f"Finished design run!\nCollecting results...")
+    print(f"Finished design run!")

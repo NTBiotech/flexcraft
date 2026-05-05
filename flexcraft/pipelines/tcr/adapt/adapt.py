@@ -125,7 +125,7 @@ class ADAPT:
             raise FileNotFoundError(f"Input dir {self.in_dir} does not exist!")
         
         if out_dir:
-            self.out_dir = out_dir
+            self.out_dir = Path(out_dir)
         else:
             self.out_dir = self.op_dir/(datetime.now().strftime("%Y-%d-%b_%H:%M:%S")+f"_{name}_0")
             n=0
@@ -133,12 +133,9 @@ class ADAPT:
                 n+=1
                 self.out_dir = self.op_dir/(self.out_dir.name[:-1]+str(n))
         
-        if isinstance(self.out_dir, str):
-            self.out_dir = Path(self.out_dir)
-        
         if not self.out_dir.exists():
             print(f"Creating Output Directory at {self.out_dir}")
-            self.out_dir.mkdir()
+            self.out_dir.mkdir(exist_ok=True)
 
         # map cdr id to start, end tuple (end exclusive)
         self.redesign_all_cdrs = redesign_all_cdrs
