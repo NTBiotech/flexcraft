@@ -67,13 +67,14 @@ def clean_chothia(file)->Path:
                     wf.write(l)
     return out_path
 
-def download_structure(pdb_id: str, file_format: str = "biological assembly", out_dir: str = ".")->Path:
+def download_structure(pdb_id: str, file_format: str = "biological assembly", out_dir: str = ".")->Path|None:
     """
     Download a structure file from RCSB PDB.
     
     file_format: 'pdb', 'cif' (mmCIF), 'bcif' (BinaryCIF), biological assembly (pdb1.gz) or antibody (.pdb from SAbDab).
     """
     from urllib.request import urlretrieve
+    from urllib.error import HTTPError
     base_urls = {
         "biological assembly": f"https://files.rcsb.org/download/{pdb_id.upper()}.pdb1.gz",
         "pdb": f"https://files.rcsb.org/download/{pdb_id.upper()}.pdb",
@@ -84,15 +85,19 @@ def download_structure(pdb_id: str, file_format: str = "biological assembly", ou
     url = base_urls[file_format]
     suffix = {"pdb": ".pdb", "cif": ".cif", "bcif": ".bcif", "biological assembly":".pdb.gz" ,"antibody":".pdb"}.get(file_format, ".pdb")
     out_path = Path(out_dir) / f"{pdb_id.upper()}{suffix}"
-    urlretrieve(url, out_path)
-    if out_path.suffix == ".gz":
-        # decompress
-        import gzip
-        import shutil
-        with gzip.open(out_path, 'rb') as f_in:
-            with open(out_path.with_suffix(''), 'wb') as f_out:
-                shutil.copyfileobj(f_in, f_out)
-        return out_path.with_suffix("")
+    try:
+        urlretrieve(url, out_path)
+        if out_path.suffix == ".gz":
+            # decompress
+            import gzip
+            import shutil
+            with gzip.open(out_path, 'rb') as f_in:
+                with open(out_path.with_suffix(''), 'wb') as f_out:
+                    shutil.copyfileobj(f_in, f_out)
+            return out_path.with_suffix("")
+    except HTTPError as e:
+        print(f"Encountered HTTPError for {pdb_id}: {e}")
+        return None
     return out_path
 
 def get_mhc_by_accession(accession, base="https://www.ebi.ac.uk/cgi-bin/ipd/api/allele")->Dict[str,str]|int:

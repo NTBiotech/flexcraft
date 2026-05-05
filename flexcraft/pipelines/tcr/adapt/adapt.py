@@ -919,7 +919,7 @@ class ADAPT:
         file_name:str|Path,
         specs:pd.Series|dict,
         family_limit:int=10,
-        full_limit:int=400,
+        full_limit:int=12,
         delete_file=False,
     ):
         '''
@@ -934,18 +934,19 @@ class ADAPT:
             specs = pd.Series(specs)
         # add to pool and remove worst performing
         with self.lock:
-            self.append_scores(specs, file_name)
+            self.append_scores(specs, str(file_name))
             scores = self.get_scores()
-            family:pd.DataFrame = scores.loc[scores["scaffold"]==specs["scaffold"]]
+            scores_sub = scores[scores["in_pool"]]
+            family:pd.DataFrame = scores_sub.loc[scores_sub["scaffold"]==specs["scaffold"]]
             if len(family.loc[family["in_pool"]]) > family_limit:
                 # if family limit reached, drop least score
                 out_name = family.loc[family["in_pool"]].sort_values("score", ascending=False).iloc[0].name
-            elif scores["in_pool"].sum() < full_limit:
+            elif scores_sub["in_pool"].sum() < full_limit:
                 # if limit not reached dont drop any
                 return None
             else:
                 # remove least performing
-                out_name = scores.sort_values("score", ascending=False).iloc[0].name
+                out_name = scores_sub.sort_values("score", ascending=False).iloc[0].name
 
             print(scores)
             scores.loc[out_name, "in_pool"] = False
