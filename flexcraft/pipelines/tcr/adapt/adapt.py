@@ -214,7 +214,8 @@ class ADAPT:
             "num_samples":1,
             "num_sampling_steps":25,
             "deterministic":False,
-            "predictor":None}
+            "predictor":None,
+            "msa":False} # True: always use msa False: never use msa | None: use msa when no template
         config.update(boltz_config)
 
         self.boltz_docking = config["docking"]
@@ -226,6 +227,7 @@ class ADAPT:
             self.boltz_num_samples = config["num_samples"]
             self.boltz_num_sampling_steps = config["num_sampling_steps"]
             self.boltz_deterministic = config["deterministic"]
+            self.boltz_msa = config["msa"]
             if config["predictor"] is None:
                 self.boltz_model = Joltz2(model=self.boltz_model_name+".ckpt", cache=self.boltz_parameter_path)
                 self.boltz_predictor = self.boltz_model.predictor_adhoc(
@@ -337,10 +339,10 @@ class ADAPT:
         ):
         
         config = {
-        "pmpnn_model":None,
-        "pmpnn_parameter_path":None,
-        "pmpnn_hparams":{},
-        "pmpnn_n_per_target":3}
+        "model":None,
+        "parameter_path":None,
+        "hparams":{},
+        "n_per_target":3}
         config.update(pmpnn_config)
 
         self.pmpnn_hparams = {
@@ -350,10 +352,10 @@ class ADAPT:
             "training_noise":0.2,#Å,
             "center_logits":False,
         }
-        self.pmpnn = config["pmpnn_model"]
-        self.pmpnn_parameter_path = config["pmpnn_parameter_path"]
-        self.pmpnn_hparams.update(config["pmpnn_hparams"])
-        self.pmpnn_n_per_target = config["pmpnn_n_per_target"]
+        self.pmpnn = config["model"]
+        self.pmpnn_parameter_path = config["parameter_path"]
+        self.pmpnn_hparams.update(config["hparams"])
+        self.pmpnn_n_per_target = config["n_per_target"]
 
         if self.pmpnn is None:
             self.pmpnn = jit(make_pmpnn(self.pmpnn_parameter_path, eps=0.05))
@@ -374,21 +376,21 @@ class ADAPT:
         
         
         config = {
-        "af2_model":None,
-        "af2_params":None,
-        "af2_model_name":None,
-        "af2_parameter_path":None,
-        "af2_multimer":True,
-        "af2_num_recycle":0,
+        "model":None,
+        "params":None,
+        "model_name":None,
+        "parameter_path":None,
+        "multimer":True,
+        "num_recycle":0,
         }
 
         config.update(af2_config)
-        self.af2_model = config["af2_model"]
-        self.af2_params = config["af2_params"]
-        self.af2_model_name = config["af2_model_name"]
-        self.af2_parameter_path = config["af2_parameter_path"]
-        self.af2_multimer = config["af2_multimer"]
-        self.af2_num_recycle = config["af2_num_recycle"]
+        self.af2_model = config["model"]
+        self.af2_params = config["params"]
+        self.af2_model_name = config["model_name"]
+        self.af2_parameter_path = config["parameter_path"]
+        self.af2_multimer = config["multimer"]
+        self.af2_num_recycle = config["num_recycle"]
 
         if self.af2_model is None or self.af2_params is None:
             assert (not self.af2_model_name is None) or (not self.af2_parameter_path is None), ValueError("Specify either model name or parameter path!")
@@ -481,6 +483,7 @@ class ADAPT:
         
         if not templates is None:
             for t in templates:
+                t, _ = self.pad_design(t)
                 af_input = af_input.add_template(t)
 
         af_result = self.af_infer(af_input=af_input)
@@ -507,7 +510,7 @@ class ADAPT:
         evaluate:bool=False,
         is_target:np.ndarray|None=None,
         template:DesignData|None=None,
-        )->List[DesignData]|Tuple[List[DesignData], float]:
+        )->List[DesignData]|Tuple[List[DesignData]|DesignData, float]|DesignData:
         '''
         Predict protein structure using Boltz-2.
         Returns:
@@ -517,24 +520,29 @@ class ADAPT:
         '''
         chain_index = input_design["chain_index"]
         input_design, pad_length = self.pad_design(input_design=input_design)
-        chain_masks = (input_design["chain_index"][None,:] == np.unique(input_design["chain_index"])[:, None])
+        chain_masks = (input_design["chain_index"][None,:] == jnp.unique(input_design["chain_index"])[:, None])
+        
         if not template is None:
             template_dir = tempfile.gettempdir()
             template_files = []
-            for chain in np.unique(input_design["chain_index"]):
-
-                template[template["chain_index"]==chain].to_pdb(f"{template_dir}/template_{chain}.pdb")
-                template_files.append(f"{template_dir}/template_{chain}.pdb")
+            for chain, mask in enumerate(chain_masks):
+                p = f"{template_dir}/template_{chain}.pdb"
+                template,_ = self.pad_design(template)
+                print_dd(template[mask], f"template for chain {chain}")
+                template[mask].save_pdb(p)
+                template_files.append(p)
+            for f in template_files:
+                print(f"{f}: {Path(f).exists()}")
         else:
-            template_files=np.full(len(chain_masks), None)
-
+            template_files=len(chain_masks) * [None]
+        
         boltz_prediction = self.boltz_predictor(
             self.key(), 
             *[
                 {
                     "sequence": decode(input_design["aa"][c], AF2_CODE),
                     "kind":"protein",
-                    "use_msa": template is None,
+                    "use_msa": template is None if self.boltz_msa is None else self.boltz_msa,
                     "template_file":template_path
                 }
                 for c, template_path in zip(chain_masks, template_files)
@@ -630,19 +638,21 @@ class ADAPT:
         result:AFResult|JoltzResult|DesignData,
         input_design:DesignData,
         is_target:np.ndarray,
+        scale_ipae:bool=True
         ) -> float:
         '''
         Calculate score for protein design.
         '''
         cdr3_rmsd = self.cdr3_rmsd(
             result=result, input_design=input_design, is_target=is_target)
-        ipae = self.ipae(result=result)
+        ipae = self.ipae(result=result, scale_ipae=scale_ipae)
         return 2*ipae+0.5*cdr3_rmsd
 
 
     def ipae(
         self,
         result:AFResult|JoltzResult|DesignData,
+        scale_ipae:bool=True
     )-> float:
         '''
         Compute the mean PAE(predicted aligned error) for all (pMHC, TCR)x(TCR, pMHC) residue pairs.
@@ -652,6 +662,8 @@ class ADAPT:
             pae_matrix=result["pae"]
         else:
             pae_matrix = result.pae
+        if scale_ipae:
+            pae_matrix *= 32
 
         mask = (result.chain_index[:,None] == self.tcr_chain_index[None,:]).sum(axis=1)>0
         mask = mask[:,None]!=mask[None,:]
@@ -718,7 +730,7 @@ class ADAPT:
 
         # docking step (structure prediction without evaluation)
         if self.boltz_docking:
-            boltz_designs = self.boltz_docking_step(input_design=design, template_path=None)
+            boltz_designs = self.boltz_docking_step(input_design=design, template=None)
             design = boltz_designs.pop()
         else:
             design = self.af_docking_step(input_design=design, is_target=target_mask)
@@ -730,19 +742,19 @@ class ADAPT:
         structures = []
         scores = []
         print_dd(designs[0], "Redesigned")
+        templates = None
+        if self.boltz_docking:
+            templates = boltz_designs
         for n,design in enumerate(designs):
-
             # redocking + evaluation step
             if self.boltz_redocking:
                 design, score = self.boltz_docking_step(
                     input_design=design,
                     evaluate=True,
                     is_target=target_mask,
+                    template=list(templates)[0]
                 )
             else:
-                templates = None
-                if self.boltz_docking:
-                    templates = boltz_designs
                 design, score = self.af_docking_step(
                     input_design=design,
                     evaluate=True,
@@ -839,6 +851,7 @@ class ADAPT:
         print(f"CDRs: {cdrs}")
         print_dd(scaffold, "Input")
         # mutate 2 cdr positions
+        original = scaffold.copy()
         scaffold, mutated_cdrs = self.mutate_cdrs(
             input_design=scaffold,
             cdrs=cdrs,
@@ -859,7 +872,7 @@ class ADAPT:
 
         # docking step (structure prediction without evaluation)
         if self.boltz_docking:
-            boltz_designs = self.boltz_docking_step(input_design=scaffold)
+            boltz_designs = self.boltz_docking_step(input_design=scaffold, template=None)
             scaffold = boltz_designs.pop()
         else:
             scaffold = self.af_docking_step(input_design=scaffold, is_target=target_mask)
@@ -872,6 +885,9 @@ class ADAPT:
         structures = []
         scores = []
         print_dd(designs[0], "Redesigned")
+        templates = None
+        if self.boltz_docking:
+            templates = boltz_designs
         for n,design in enumerate(designs):
 
             # redocking + evaluation step
@@ -880,11 +896,9 @@ class ADAPT:
                     input_design=design,
                     evaluate=True,
                     is_target=target_mask,
+                    template=list(templates)[0]
                 )
             else:
-                templates = None
-                if self.boltz_docking:
-                    templates = boltz_designs
                 design, score = self.af_docking_step(
                     input_design=design,
                     evaluate=True,

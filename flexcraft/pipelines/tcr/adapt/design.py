@@ -43,7 +43,7 @@ if (len(mhcs)>1) and (len(peptides)>1):
 
 for mhc, peptide in zip(mhcs, peptides):
     if (len(mhcs)>1) and (len(peptides)>1):
-        config.update({"out_dir":out_dir+f"{mhc}_{peptide}"})
+        config.update({"out_dir":out_dir+f"{mhc}_{peptide}"})  # pyright: ignore[reportOperatorIssue]
 
     adapt = ADAPT(
         **config
