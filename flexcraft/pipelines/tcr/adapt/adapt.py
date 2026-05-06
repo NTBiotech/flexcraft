@@ -274,12 +274,14 @@ class ADAPT:
         for chain in self.mhc_chain_index:
             print("trim_design chain",chain)
             chain_mask = input_design["chain_index"]==chain
-            if (chain_mask.sum()-trim) < 50:
-                print("WARNING! trimmed mhc chain to less than 50 AAs! Manual trimming may be necessary.")
             trim_mask = np.ones(len(input_design["aa"]), dtype=np.bool_)
-            chain_end = np.arange(len(chain_mask))[chain_mask][-1]+1
-            # trim from the chain end
-            trim_mask[chain_end-trim:chain_end] = False
+            if (chain_mask.sum()-trim) < 50:
+                print("WARNING! trimmed mhc chain to less than 50 AAs! Removing chain fully!")
+                trim_mask[chain_mask]=False
+            else:
+                chain_end = np.arange(len(chain_mask))[chain_mask][-1]+1
+                # trim from the chain end
+                trim_mask[chain_end-trim:chain_end] = False
             input_design = input_design[trim_mask]
             print(f"Trimming chain {chain} by {trim} from {chain_mask.sum()} to a total of {len(input_design['aa'])} residues.")
         return input_design
@@ -300,11 +302,13 @@ class ADAPT:
             print(f"Design with length {len(input_design['aa'])} exceeds chain_cache_len {self.chain_cache_len}!\nSkipping padding step.")
             return input_design, pad_length, *covariates
         print(f"Padding design by {pad_length}...")
-        atom_format = input_design["atom_mask"].shape[1]
+        atom_format = input_design["atom_mask"].shape[1]  # pyright: ignore[reportAttributeAccessIssue]
+        chain_index = jnp.max(input_design["chain_index"])+1  # pyright: ignore[reportArgumentType]
         input_design = DesignData.concatenate(
             [input_design, DesignData.from_length(pad_length).update(
                 aa=jnp.full((pad_length,), 7, dtype=jnp.int32),
                 mask=jnp.zeros((pad_length,), dtype=jnp.bool_),
+                chain_index=jnp.full((pad_length,), chain_index, dtype=jnp.int32),
                 atom_positions=jnp.zeros((pad_length, atom_format, 3), dtype=jnp.float32),
                 atom_mask=jnp.zeros((pad_length, atom_format), dtype=jnp.bool_),
                 )],
@@ -620,8 +624,7 @@ class ADAPT:
 
         target_aa = np.array(input_design["aa"])
         target_aa[target_mask] = 20
-        input_design = input_design.update(aa=jnp.array(target_aa))
-
+        input_design = input_design.update(aa=aas.translate(jnp.array(target_aa), aas.AF2_CODE, aas.PMPNN_CODE))
         # predict on all aas to calculate center
         logit_center = self.pmpnn(self.key(), input_design)["logits"].mean(axis=0)
         pmpnn_sampler = sample(self.pmpnn, logit_transform=self.pmpnn_transform(logit_center))
@@ -675,7 +678,7 @@ class ADAPT:
         result:AFResult|JoltzResult,
         input_design: DesignData,
         is_target:np.ndarray,
-        ) -> float:
+        ):
         '''
         Calculate the RMSD for CDR3 chains after alignment of MHC chain. For antibodies, the antigen is used for alignment.
         Args:
@@ -704,6 +707,12 @@ class ADAPT:
         print(
             f"\n!---Design Trial for {scaffold_name}---!\n",
         )
+        file_name = f"{scaffold_name}_0.pdb"
+        n = 0
+        while (self.out_dir/file_name).exists():
+            n += 1
+            file_name = f"{scaffold_name}_{n}.pdb"
+        #design.save_pdb(f"{(self.out_dir/file_name).with_suffix('')}_input.pdb") checks out
 
 
         # filter ids
@@ -726,7 +735,7 @@ class ADAPT:
         target_mask = (
             self.cdr_mask(design, chain_index=self.tcr_chain_index[0], cdr_ids=alpha_cdrs)
             + self.cdr_mask(design, chain_index=self.tcr_chain_index[1], cdr_ids=beta_cdrs)
-        ) > 0
+        ) > 0 # checks out
 
         # docking step (structure prediction without evaluation)
         if self.boltz_docking:
@@ -767,11 +776,6 @@ class ADAPT:
         score = max(scores)
         print_dd(design, "Redocked")
         # save design as unique file name
-        file_name = f"{scaffold_name}_0.pdb"
-        n = 0
-        while (self.out_dir/file_name).exists():
-            n += 1
-            file_name = f"{scaffold_name}_{n}.pdb"
         design.save_pdb(self.out_dir/file_name)
         print(f"Saving design with score {score} to {file_name}!")
         # Use a named Series so missing CDR1/CDR2 columns get NaN automatically
@@ -850,6 +854,12 @@ class ADAPT:
         )
         print(f"CDRs: {cdrs}")
         print_dd(scaffold, "Input")
+        # save design as unique file name
+        file_name = f"{scaffold_name}_0.pdb"
+        n = 0
+        while (self.out_dir/file_name).exists():
+            n += 1
+            file_name = f"{scaffold_name}_{n}.pdb"
         # mutate 2 cdr positions
         original = scaffold.copy()
         scaffold, mutated_cdrs = self.mutate_cdrs(
@@ -877,6 +887,7 @@ class ADAPT:
         else:
             scaffold = self.af_docking_step(input_design=scaffold, is_target=target_mask)
         print_dd(scaffold, "Docked")
+        #scaffold.save_pdb(f"{(self.out_dir/file_name).with_suffix('')}_docked.pdb")
 
         # redesign step: redesign the CDR positions
 
@@ -910,12 +921,6 @@ class ADAPT:
         design = structures[np.argmax(scores)]
         score = max(scores)
         print_dd(design, "Redocked")
-        # save design as unique file name
-        file_name = f"{scaffold_name}_0.pdb"
-        n = 0
-        while (self.out_dir/file_name).exists():
-            n += 1
-            file_name = f"{scaffold_name}_{n}.pdb"
         design.save_pdb(self.out_dir/file_name)
         print(f"Saving design with score {score} to {file_name}!")
         # Use a named Series so missing CDR1/CDR2 columns get NaN automatically
