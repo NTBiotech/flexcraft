@@ -839,6 +839,8 @@ class ADAPT:
         scaffold:DesignData,
         scaffold_name:str,
         cdrs:List[str]=["acdr3", "bcdr3"],
+        family_limit:int=10,
+        full_limit:int=200
         ):
         
         # filter ids
@@ -930,7 +932,7 @@ class ADAPT:
             **{f"{k}_coords":v for k, v in self.cdr_coords.items()},}
 
         # compare to existing
-        print("Replacing ",self.compare(file_name,row))
+        print("Replacing ",self.compare(file_name,row,family_limit=family_limit,full_limit=full_limit,))
 
 
     def compare(

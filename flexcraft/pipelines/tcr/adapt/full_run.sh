@@ -12,6 +12,8 @@
 # TYPE="tcr"
 # OUT_DIR="./data/adapt/full_run_${current_time}"
 # WD="."
+# FAMILY_LIMIT=10
+# FULL_LIMIT=100
 #
 # with:
 # $ cat $BINDERS
@@ -121,7 +123,7 @@ refine_per_task=$(($N_REFINEMENT / $N_TASKS))
 echo "refinements per task: ${refine_per_task}"
 for n in $(seq $N_TASKS); do
     echo "Refine task ${n}..."
-    python ./flexcraft/pipelines/tcr/adapt/refine.py --designed_dir $OUT_DIR --refine_steps $refine_per_task --cdrs acdr3 bcdr3  --config $ADAPT_CONFIG &
+    python ./flexcraft/pipelines/tcr/adapt/refine.py --designed_dir $OUT_DIR --refine_steps $refine_per_task --cdrs acdr3 bcdr3  --config $ADAPT_CONFIG --family_limit $FAMILY_LIMIT --full_limit $FULL_LIMIT &
     pids+=("$!")
 done
 # wait for refinement to finish

@@ -14,6 +14,8 @@ parser = argparse.ArgumentParser(
 parser.add_argument("--designed_dir", type=Path)
 parser.add_argument("--refine_steps", type=int, default=100)
 parser.add_argument("--cdrs", nargs="*")
+parser.add_argument("--family_limit", type=int, default=10)
+parser.add_argument("--full_limit", type=int, default=100)
 
 parser.add_argument("--config", default="./config.json",)
 
@@ -39,7 +41,9 @@ for n in range(args.refine_steps):
     adapt.refine_trial(
         scaffold=design,
         scaffold_name=design_name,
-        cdrs=list(args.cdrs)
+        cdrs=list(args.cdrs),
+        family_limit=args.family_limit,        
+        full_limit=args.full_limit,
     )
 
 print(f"Finished design run!")
