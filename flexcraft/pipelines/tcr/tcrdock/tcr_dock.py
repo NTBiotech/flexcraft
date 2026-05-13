@@ -18,7 +18,11 @@ from Bio.SeqRecord import SeqRecord
 from Bio import SeqIO
 import tempfile
 
+import jax.numpy as jnp
+
 from scipy.spatial.transform import Rotation
+
+#---Alignments---
 
 ## 1-indexed
 ## numbered wrt the sequence in 3pqyA.fasta ie class1_template_seq below
@@ -63,11 +67,21 @@ core_positions_generic_1x = [
 102, 103, 104 ## 104 is C
 ]
 # (1 indexed)
+''' installation of ncbi blast
+if sys.platform == 'linux':
+    address = ('https://ftp.ncbi.nlm.nih.gov/blast/executables/blast+/latest/ncbi-blast-2.17.0+-x64-linux.tar.gz')
+elif sys.platform == 'darwin':
+    address = ('https://ftp.ncbi.nlm.nih.gov/blast/executables/blast+/latest/ncbi-blast-2.17.0+-x64-macosx.tar.gz')
+else:
+    print('unrecognized platform type:', sys.platform,'expected "linux" or "darwin"')
+    exit()'''
 
 def align_seq(x,y):
     aligner = Align.PairwiseAligner(scoring="blastp")
     alignments = aligner.align(x,y)
     alignment = max(alignments, key=lambda x: x.score)
+    print(f"Alignment score: {alignment.score}")
+    print(alignment)
     if alignment.score<1:
         raise ValueError(f"Alignment score of {alignment.score} is too low!")
     align = {}
@@ -145,7 +159,7 @@ def get_mhc2_positions(
             if not db_files[c].with_suffix(".fasta.phr").exists():
                 print(f"Created blastdb for {db_from_fasta(db_files[c], blast_exe, dbtype='prot')}")
 
-            seq = SeqRecord(Seq(decode(design["aa"][mask], AF2_CODE)), id=params["pdb_id"], name="mhc 2")
+            seq = SeqRecord(Seq(decode(design["aa"][mask], AF2_CODE)), id="mhc2_query", name="mhc 2")
             
             # write seq to fasta
             with tempfile.TemporaryDirectory(prefix="tcrdock_") as tmp_dir:
@@ -167,13 +181,14 @@ def get_mhc2_positions(
                 if len(hits)<1:
                     raise AttributeError("No hits found!")
                 hit = hits.iloc[0]
-                if float(hit["evalue"])>0.05:
-                    raise AttributeError("E-Value too low!")
+                print(f"Found hit with evalue {hit['evalue']}")
+                if float(hit["evalue"])>0.5 and not reverse:
+                    raise AttributeError(f"E-Value too low: {hit['evalue']}")
 
             align = align_from_blast(hit)
             _positions = [align[x] for x in class2_alfas_positions_0indexed[c]]
             index = np.arange(len(design["aa"]))[mask]
-            positions.update({int(chain_index):np.array([index[x] for x in _positions])})
+            positions.update({c:np.array([index[x] for x in _positions])})
     except AttributeError as e:
         print(e, "Running in reverse mode.")
         if not reverse:
@@ -188,7 +203,6 @@ def get_mhc2_positions(
             raise e
     return positions
 
-
 #--- Geometry ---
 
 def centroid(points:np.ndarray):
@@ -199,44 +213,100 @@ def proj(a:np.ndarray,b:np.ndarray):
     return (np.dot(a,b)/np.linalg.norm(b))*b
 def orthogonalize(a:np.ndarray,b:np.ndarray):
     return np.array(a-proj(a,b))
+def gram_schmidt(arr:np.ndarray):
+    '''Orthogonalize rows of arr.'''
+    orth = []
+    for n,v in enumerate(arr):
+        u = v.copy()
+        for r in range(n):
+            u-=proj(arr[r], v)
+        orth.append(u)
+    return np.stack(orth, axis=0)
 
 def get_axes(a,b):
-    rotation, rssd = Rotation.align_vectors(a, b[::1])
-    axis1=rotation.inv().as_mrp()
-    axis2=orthogonalize(centroid(a)-centroid(b), axis1)
+    '''Calculates normalized axes from two sets of points.'''
+    center = centroid(np.concat([a,b]))
+    rotation, rssd = Rotation.align_vectors(a - center, b - center)
+    # TODO: inner product with cdr or peptide
+    # if negative invert
+    axis1 = rotation.inv().as_mrp()
+    axis1 = axis1/np.linalg.norm(axis1)
+    axis2 = orthogonalize(centroid(a)-centroid(b), axis1)
+    axis2 = axis2/np.linalg.norm(axis2)
     axis3 = np.cross(axis2,axis1)
-    return axis1,axis2,axis3
+    axis3 = axis3/np.linalg.norm(axis3)
+    return gram_schmidt(np.array((axis3,axis2,axis1))).T, center
 
-def plot_axes(a:np.ndarray,b:np.ndarray, plot_points:bool=False, normalize:bool|float|int=True, angle:None|float|int=None):
+def check_direction(axis:np.ndarray, center:np.ndarray, reference:np.ndarray, covariate:np.ndarray|None=None):
+    print("Before correction: ",axis, covariate)
+    if len(reference.shape)>1:
+        reference = reference.mean(axis=(0,1))
+    reference -= center
+    reference /= np.linalg.norm(reference)
+    print(f"Correcting to {reference}")
+    cosine = np.inner(axis, reference)
+    print(f"Angle is {np.degrees(np.arccos(cosine))}")
+    if cosine<0:
+        axis=-axis
+        if not covariate is None:
+            covariate = -covariate
+    print("After correction: ",axis, covariate)
+    if covariate is None:
+        return axis
+    return axis, covariate
+
+
+def plot_axes(
+    axes:None|np.ndarray=None,
+    center:None|np.ndarray=None,
+    a:np.ndarray|None=None,
+    b:np.ndarray|None=None,
+    plot_points:bool=False,
+    normalize:bool|float|int=True,
+    angle:None|float|int=None,
+    ax=None,
+    color=False,
+    lim:tuple=(-1,1),
+    ref:np.ndarray|None=None
+    ):
     n=1
     if isinstance(normalize, (float, int)):
         n = normalize
         normalize=False
-    fig = plt.figure()
-    center = centroid(np.concatenate([a,b], axis=0))
-    ax = fig.add_subplot(projection='3d', )
-    axis1, axis2, axis3 = get_axes(a,b)
-    if plot_points:
-        ax.scatter(*a.T,c="blue")
-        ax.scatter(*centroid(a), c="darkblue",)
-        ax.scatter(*b.T,c="red")
-        ax.scatter(*centroid(b), c="darkred",)
+    if ax is None:
+        print("New plot axis")
+        fig = plt.figure()
+        ax = fig.add_subplot(projection='3d', )
+    if axes is None or center is None:
+        print("Calculating Axes")
+        axes, center = get_axes(a,b)
+
+    axis1, axis2, axis3 = axes.T
+    if not ref is None:
+        axis3, axis1 = check_direction(axis3, center,ref, axis1)
+    if plot_points and not a is None and not b is None:
+        ax.scatter(*a.T,c="blue" if not color else color)
+        ax.scatter(*centroid(a), c="darkblue" if not color else color)
+        ax.scatter(*b.T,c="red" if not color else color)
+        ax.scatter(*centroid(b), c="darkred" if not color else color)
+
     ax.scatter(*center, c="black")
     #ax.quiver(*center, *(centroid(a)-centroid(b)), normalize=True, pivot="middle",)
     #ax.quiver(*center,color="purple", *(rotation.apply(centroid(a)-centroid(b))), normalize=True, pivot="middle")
-    ax.quiver(*center, *((axis1/np.linalg.norm(axis1))*n), normalize=normalize, pivot="tail",)
-    ax.scatter(*((center+axis1)/np.linalg.norm(center+axis1)), alpha=0)
-    ax.quiver(*center, *((axis2/np.linalg.norm(axis2))*n), normalize=normalize, color="purple")
-    ax.scatter(*((center+axis2)/np.linalg.norm(center+axis2)), alpha=0)
-    ax.quiver(*center, *((axis3/np.linalg.norm(axis3))*n), normalize=normalize, color="yellow")
-    ax.scatter(*((center+axis3)/np.linalg.norm(center+axis3)), alpha=0)
+    ax.quiver(*center, *((axis1/np.linalg.norm(axis1))*n), normalize=normalize, pivot="tail", color="red" if not color else color, label="axis1")
+    ax.scatter(*((center+axis1)), alpha=0)
+    ax.quiver(*center, *((axis2/np.linalg.norm(axis2))*n), normalize=normalize, color="purple" if not color else color, label="axis2")
+    ax.scatter(*((center+axis2)), alpha=0)
+    ax.quiver(*center, *((axis3/np.linalg.norm(axis3))*n), normalize=normalize, color="yellow" if not color else color, label="axis3")
+    ax.scatter(*((center+axis3)), alpha=0)
     ax.set_xlabel('X Label')
     ax.set_ylabel('Y Label')
     ax.set_zlabel('Z Label')
+    ax.legend()
     if not plot_points:
-        ax.set_xlim(center[0]-1,center[0]+1)
-        ax.set_ylim(center[1]-1,center[1]+1)
-        ax.set_zlim(center[2]-1,center[2]+1)
+        ax.set_xlim(center[0]+lim[0],center[0]+lim[1])
+        ax.set_ylim(center[1]+lim[0],center[1]+lim[1])
+        ax.set_zlim(center[2]+lim[0],center[2]+lim[1])
     ax.set_title("Orientation Axes")
     if isinstance(angle, (float, int)):
         # Normalize the angle to the range [-180, 180] for display
@@ -255,7 +325,7 @@ def plot_axes(a:np.ndarray,b:np.ndarray, plot_points:bool=False, normalize:bool|
 
         # Update the axis view and title
         ax.view_init(elev, azim, roll)
-    return fig
+    return ax
 
 def get_mhc_coords(design:DesignData, positions:np.ndarray, atoms:list=["CA"]):
     order = ["N", "CA", "C", "O", "CB"]
@@ -263,9 +333,330 @@ def get_mhc_coords(design:DesignData, positions:np.ndarray, atoms:list=["CA"]):
     return design["atom_positions"][(np.arange(len(design["aa"]))[:,None]==positions[None,:]).any(axis=1)][:,atom_index,:].squeeze()
 
 def get_tcr_coords(design:DesignData, tcr_chain_index:np.ndarray, atoms:list=["CA"]):
+    '''Get the TCR coordinates for stub calculation. Expects IMGT numbered residue_index for the tcr chains.'''
     order = ["N", "CA", "C", "O", "CB"]
     atom_index = np.array([order.index(a) for a in atoms], dtype=np.int32)
     chain_mask = (design["chain_index"][:,None]==tcr_chain_index[None,:]).any(axis=1)
     positions_mask = (design["residue_index"][:,None]==np.array(core_positions_generic_1x)[None,:]).any(axis=1)
     mask = positions_mask&chain_mask
     return design["atom_positions"][mask][:,atom_index,:].squeeze()
+
+def test_axes_operations(axes1:np.ndarray, center1:np.ndarray, axes2:np.ndarray, center2:np.ndarray, get_ax_op:Callable, apply_ax_op:Callable,):
+    op = get_ax_op(axes1, center1, axes2, center2)
+    axesop, centerop = apply_ax_op(axes1, center1, op)
+    assert np.isclose(axes2,axesop, atol=0.00001).all()
+    assert np.isclose(center2,centerop, atol=0.00001).all()
+    rev_axes, rev_center = rev_ax_op(axesop, centerop, op)
+    assert np.isclose(axes1,rev_axes, atol=0.00001).all()
+    assert np.isclose(center1,rev_center, atol=0.00001).all()
+
+def get_rotation(axes1, axes2):
+    return axes2@axes1.T
+
+def get_centering(center1, center2):
+    return center1-center2
+
+def get_ax_op(axes1, center1, axes2, center2)->Tuple[np.ndarray,np.ndarray]:
+    # rotation
+    r = get_rotation(axes1, axes2)
+    # centering
+    d = get_centering(center1, center2)
+    return r,d
+
+def apply_ax_op(axes, center, op:tuple):
+    return op[0]@axes, center-op[1]
+
+def rev_ax_op(axes, center, op:tuple):
+    return op[0].T@axes, center + op[1]
+
+#---wrapper functions---
+
+def number_anarci(
+    input_design:DesignData,
+    mhc_class:int,
+    code:str=AF2_CODE,
+    scheme:str="imgt",
+    )->DesignData:
+    '''
+    Basic numbering of AB or TCR sequences.
+    Returns:
+        (DesignData, dict): numbered design and dict containing "mhc_chain_index" and "tcr_chain_index" numpy arrays
+    '''
+    params = {"tcr_chain_index":np.array([0,1]),
+    "mhc_chain_index":np.array([2]),}
+    chains = np.unique(input_design["chain_index"])
+
+    for chain in chains:
+        chain_mask = np.array(input_design["chain_index"]) == chain
+        # Pass only this chain's sequence to anarci
+        chain_aa = np.array(input_design["aa"])[chain_mask]
+        seq = decode(chain_aa, code=code)
+        numbering = anarci.number(sequence=seq, scheme=scheme)
+        if numbering[0]:
+            chain_type = numbering[-1]
+            if chain_type in ["A", "L"]:
+                print(f"Setting chain {chain} to {chain_type}!")
+                params["tcr_chain_index"][0] = chain
+            elif chain_type in ["B", "H"]:
+                print(f"Setting chain {chain} to {chain_type}!")
+                params["tcr_chain_index"][1] = chain
+            else:
+                print(f"Unknown chain type {chain_type} of chain {chain}!")
+                continue
+            # Build IMGT position strings (e.g. "1", "111", "111A") then convert to int
+            numbering = [f"{x[0][0]}{x[0][1].strip()}" for x in numbering[0] if x[1] != "-"]
+            numbering = [int(x) if x.isnumeric() else int(x[:-1]) for x in numbering]
+
+            residue_index = np.array(input_design["residue_index"])
+            if len(residue_index[chain_mask])>len(numbering):
+                # extend variable region by constant region
+                numbering += np.arange(numbering[-1]+1,numbering[-1]+1+chain_mask.sum()-len(numbering)).tolist()
+            residue_index[chain_mask] = numbering
+            input_design = input_design.update(residue_index=np.array(residue_index))
+        else:
+            print(f"No numbering found for chain {chain}!")
+    # check if chain indices correct
+    if params["tcr_chain_index"][0]==params["tcr_chain_index"][1]:
+        raise ValueError("TCR chains identical! Currently only 2 chain tcrs supported.")
+
+    # fix mhc chain index to longest non-tcr chain
+    chains = np.unique(input_design["chain_index"])
+    # mask out tcr chains
+    tcr_mask = ~(chains[:,None]==params["tcr_chain_index"][None,:]).any(axis=1)
+    chains = chains[tcr_mask]
+    # get chain lengths
+    chain_lengths =  (input_design["chain_index"][:,None] == chains[None,:]).sum(axis=0)
+    # take the n longest chain indices, where n the number of non-tcr chains -1 (for the peptide chain) 
+    # take all non-tcr-chains except for smalles (peptide, hopefully)
+    if mhc_class == 1:
+        params["mhc_chain_index"] = np.array(
+            [chains[r]
+            for r in np.argsort(chain_lengths)[:-(len(chains)-1):-1]],dtype=int
+        )
+    elif mhc_class==2:
+        params["mhc_chain_index"] = np.array(
+            [chains[r]
+            for r in np.argsort(chain_lengths)[:-len(chains):-1]],dtype=int
+        )
+    print(f"Classified chains {params['mhc_chain_index']} as MHC/antigen chains")
+    return input_design, params
+
+def convert_chains(input_design:DesignData, d:dict|None=None):
+    if d is None:
+        d = {}
+        for x,y in zip(np.sort(np.unique(input_design["chain_index"])), range(len(np.unique(input_design["chain_index"])))):
+            d[int(x)]=int(y)
+    print(d)
+    design = input_design.update(chain_index=np.array([d[int(x)] for x in input_design["chain_index"]]))
+    return design, d
+
+def get_cdr_mask(
+        input_design:DesignData,
+        tcr_chain_index:int,
+        cdr_ids:Iterable[str]=[x for x in imgt_mapper.keys() if x.startswith("a")],
+        chain_index:int|None=None,
+        ):
+        '''
+        Get a float mask (1.0 for CDR, 0.0 for framework) for cdr_ids on chain chain_index.
+        Args:
+            input_design:DesignData, must contain TCR chain in "chain_index" key
+            chain_index:int, chain_index value for TCR/Ab chain
+            cdr_ids:iterable[str], ids for cdrs (all must share the same chain letter prefix)
+        '''
+        cdr_ids = list(cdr_ids)
+        assert (np.array([x[0] for x in cdr_ids])[:,None]==np.array([x[0] for x in cdr_ids])[None,:]).all(), \
+            ValueError("All cdrs must be on the same chain!")
+        if chain_index is None:
+            chain_index = tcr_chain_index[int(cdr_ids[0].startswith("h") or cdr_ids[0].startswith("b"))]
+
+        chain_mask = np.array(input_design["chain_index"]) == chain_index
+
+        positions = [imgt_mapper[k] for k in cdr_ids]
+
+        residue_index = np.array(input_design["residue_index"])[chain_mask]
+        all_cdr_positions = np.concatenate([np.arange(s, e) for s, e in positions])
+        mask = (residue_index[:, None] == all_cdr_positions[None, :]).any(axis=1)
+
+        chain_mask[chain_mask] = mask
+
+        return chain_mask.astype(float)
+
+def parse_structure(
+    design,
+    mhc_class,
+    scale=True,
+    ):
+
+    design = design.copy()
+    #if scale:
+    #    design = Scaler.fit_transform(design)
+    # convert chain indices
+    design,_ = convert_chains(design)
+    design, params = number_anarci(design, mhc_class=mhc_class)
+
+    # get tcr stub
+    tcr_axes, tcr_center = get_axes(
+    *[get_tcr_coords(design, np.array([chain])) for chain in params["tcr_chain_index"]]
+    )
+    ref = get_tcr_ref(design, params)
+    axis3, axis1 = check_direction(tcr_axes[:,-1], tcr_center, ref, tcr_axes[:,0])
+    tcr_axes[:,-1] = axis3
+    tcr_axes[:,0] = axis1
+    # get mhc stub
+    if mhc_class==1:
+        mhc_positions = get_mhc1_positions(
+            design=design,
+            params=params,
+            )
+        mhc_coords_0 = get_mhc_coords(
+            design=design,
+            positions=mhc_positions[:6])
+        mhc_coords_1 = get_mhc_coords(
+            design=design,
+            positions=mhc_positions[6:])
+    elif mhc_class==2:
+        mhc_positions = get_mhc2_positions(
+            design=design,
+            params=params,
+            db_files={
+                "A":Path("/home/ntbiotech/Documents/Current_projects/BinderDesign/TCRdock/tcrdock/db/both_class_2_A_chains_v2.fasta"),
+                "B":Path("/home/ntbiotech/Documents/Current_projects/BinderDesign/TCRdock/tcrdock/db/both_class_2_B_chains_v2.fasta")
+            },
+            blast_exe=Path("../../../ncbi-blast-2.17.0+/bin"),
+            )
+        mhc_coords_0 = get_mhc_coords(
+            design=design,
+            positions=mhc_positions["A"])
+        mhc_coords_1 = get_mhc_coords(
+            design=design,
+            positions=mhc_positions["B"])
+    else:
+        raise ValueError(f"Invalid mhc_class {mhc_class}!")
+    print(mhc_positions)
+    mhc_axes, mhc_center = get_axes(
+            mhc_coords_0,
+            mhc_coords_1
+        )
+    
+    ref = get_mhc_ref(design, params)
+    axis3, axis1 = check_direction(mhc_axes[:,-1], mhc_center, ref, mhc_axes[:,0])
+    mhc_axes[:,-1] = axis3
+    mhc_axes[:,0] = axis1
+    op = get_ax_op(
+        tcr_axes,
+        tcr_center,
+        mhc_axes,
+        mhc_center)
+
+    return op
+
+def apply_atom_op(atom_positions:np.ndarray, op:np.ndarray):
+    atom_positions=atom_positions.squeeze()
+    # center before rotation
+    a_center = atom_positions.mean(axis=0)
+    atom_positions -= a_center
+    # rotate about 000
+    atom_positions =  np.einsum("xy,...y", op[0],atom_positions)
+    # restore to target center
+    atom_positions = atom_positions-op[1] + a_center
+    return atom_positions
+
+def rev_atom_op(atom_positions:np.ndarray, op:tuple):
+    atom_positions=atom_positions.squeeze()
+    # center before rotation
+    a_center = atom_positions.mean(axis=0)
+    atom_positions -= a_center
+    # rotate at origin
+    atom_positions = np.einsum("...y, yx",atom_positions, op[0])
+    return atom_positions + op[1] + a_center
+
+
+def apply_op(
+    design:DesignData,
+    op:np.ndarray,
+    chains:np.ndarray|Iterable,
+    design_op:None|np.ndarray=None,
+    mhc_class:int=1,
+    ):
+    chains = np.array(chains)
+    design = design.copy()
+    #scaler = Scaler(design)
+    #design = scaler.transform(design)
+    chain_mask = (design["chain_index"][:,None]==chains[None,:]).any(axis=1)
+    subset_design = design[chain_mask]
+    atom_positions = np.array(subset_design["atom_positions"].squeeze())
+    # mask out empty positions
+    atom_mask = atom_positions==0
+    # get the operation
+    if design_op is None:
+        design_op = parse_structure(design, mhc_class, scale=False)
+    # center and align on mhc axes
+    atom_positions = apply_atom_op(atom_positions, design_op)
+    # apply op in reverse to mimic binding position
+    atom_positions = rev_atom_op(atom_positions, op)
+    atom_positions[atom_mask]=0
+    # reinsert atom_positions
+    subset_design = subset_design.update(atom_positions=jnp.array(atom_positions))
+    subset_design.data = {k:jnp.array(v) for k,v in subset_design.data.items()}
+    design.data = {k:jnp.array(v) for k,v in design.data.items()}
+    design[chain_mask] = subset_design
+    #design = scaler.reverse(design)
+    return design
+
+def get_mhc_ref(design, params):
+    known_chains = np.concatenate([v for v in params.values()])
+    peptide_chain_index = np.array([k for k in np.unique(design["chain_index"]) if k not in known_chains])
+    if len(peptide_chain_index>1):
+        # if more than on unknown chain take shortest as peptide
+        chain_lengths = (design["chain_index"][:,None]==peptide_chain_index[None,:]).sum(axis=0)
+        peptide_chain_index = peptide_chain_index[np.argmin(chain_lengths)]
+    peptide_mask = design["chain_index"]==peptide_chain_index
+    return design["atom_positions"][peptide_mask]
+def get_tcr_ref(design, params):
+    cdr_mask = get_cdr_mask(design, params["tcr_chain_index"], cdr_ids=[x for x in imgt_mapper.keys() if x.startswith("a")])
+    cdr_mask = (cdr_mask + get_cdr_mask(design, params["tcr_chain_index"], cdr_ids=[x for x in imgt_mapper.keys() if x.startswith("b")]))>0
+    return design["atom_positions"][cdr_mask]
+
+class Scaler:
+    '''Simple z-scaler for DesignData objects'''
+    def __init__(self, design=None):
+        if not design is None:
+            self.fit(design)
+
+    def fit(self, design):
+        design = design.copy()
+        atom_positions = np.array(design["atom_positions"])
+        self.mask = atom_positions==0
+        self.mean = atom_positions.mean(axis=(0,1), where=~self.mask)
+        #self.std = atom_positions.std(where=~self.mask)
+    
+    def transform(self,design):
+        design = design.copy()
+        atom_positions = np.array(design["atom_positions"])
+        atom_positions-=self.mean
+        #atom_positions /= self.std
+        atom_positions[self.mask]=0
+        return design.update(atom_positions=atom_positions)
+
+    @classmethod
+    def fit_transform(self,design):
+        design = design.copy()
+        atom_positions = np.array(design["atom_positions"])
+        mask = atom_positions==0
+        mean = atom_positions.mean(axis=(0,1), where=~mask)
+        #std = atom_positions.std(where=~mask)
+        atom_positions-= mean
+        #atom_positions /= std
+        atom_positions[mask]=0
+        return design.update(atom_positions=atom_positions)
+
+    def reverse(self,design):
+        design = design.copy()
+        atom_positions = np.array(design["atom_positions"])
+        #atom_positions *= self.std
+        atom_positions += self.mean
+        atom_positions[self.mask]=0
+        return design.update(atom_positions=atom_positions)
+        
+def norm_design(design):
+    return Scaler.fit_transform(design)

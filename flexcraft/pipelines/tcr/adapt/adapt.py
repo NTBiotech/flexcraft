@@ -1093,7 +1093,7 @@ class ADAPT:
         if use_imgt_mapper:
             positions = [self.imgt_mapper[k] for k in cdr_ids]
 
-            residue_index = np.array(input_design["residue_index"])
+            residue_index = np.array(input_design["residue_index"])[chain_mask]
             all_cdr_positions = np.concatenate([np.arange(s, e) for s, e in positions])
             mask = (residue_index[:, None] == all_cdr_positions[None, :]).any(axis=1)
         else:
