@@ -95,9 +95,12 @@ def align_seq(x,y):
 
 def get_mhc1_positions(
     design,
-    params,
+    params=None,
     ):
-    chain_mask = design["chain_index"]==params["mhc_chain_index"]
+    if params is None:
+        chain_mask = np.ones(len(design["chain_index"]), dtype=np.bool_)
+    else:    
+        chain_mask = design["chain_index"]==params["mhc_chain_index"]
     mhc_seq = decode(design["aa"][chain_mask], AF2_CODE)
 
     t = align_seq(class1_template_seq, mhc_seq)
@@ -143,14 +146,17 @@ def align_from_blast(hit:pd.Series):
 
 def get_mhc2_positions(
     design:DesignData,
-    params:dict,
     db_files:Dict[str,Path],
     blast_exe:Path,
+    params:dict|None=None,
     reverse=False
     ):
     try:
         positions = {}
-        chain_masks = design["chain_index"][None,:]==params["mhc_chain_index"][:,None]
+        if params is None:
+            chain_masks = design["chain_index"][None,:]==np.unique(design["chain_index"])[:,None]
+        else:
+            chain_masks = design["chain_index"][None,:]==params["mhc_chain_index"][:,None]
         
         for c, mask, chain_index in zip(["A", "B"][::-1 if reverse else 1],chain_masks, params["mhc_chain_index"]):
             
@@ -205,9 +211,9 @@ def get_mhc2_positions(
 
 #--- Geometry ---
 
-def centroid(points:np.ndarray):
+def centroid(points:np.ndarray, where=np._NoValue):
     '''Calculate centroid of points in 3d space.'''
-    return points.mean(axis=0)
+    return np.mean(points,axis=0, where=where)
 def proj(a:np.ndarray,b:np.ndarray):
     '''Projection of vector a onto vector b'''
     return (np.dot(a,b)/np.linalg.norm(b))*b
@@ -223,13 +229,14 @@ def gram_schmidt(arr:np.ndarray):
         orth.append(u)
     return np.stack(orth, axis=0)
 
-def get_axes(a,b):
+def get_axes(a,b)->Tuple[np.ndarray, np.ndarray]:
     '''Calculates normalized axes from two sets of points.'''
+    
     center = centroid(np.concat([a,b]))
     rotation, rssd = Rotation.align_vectors(a - center, b - center)
     # TODO: inner product with cdr or peptide
     # if negative invert
-    axis1 = rotation.inv().as_mrp()
+    axis1 = rotation.as_mrp()
     axis1 = axis1/np.linalg.norm(axis1)
     axis2 = orthogonalize(centroid(a)-centroid(b), axis1)
     axis2 = axis2/np.linalg.norm(axis2)
@@ -240,7 +247,7 @@ def get_axes(a,b):
 def check_direction(axis:np.ndarray, center:np.ndarray, reference:np.ndarray, covariate:np.ndarray|None=None):
     print("Before correction: ",axis, covariate)
     if len(reference.shape)>1:
-        reference = reference.mean(axis=(0,1))
+        reference = np.mean(reference,axis=(0,1))
     reference -= center
     reference /= np.linalg.norm(reference)
     print(f"Correcting to {reference}")
@@ -356,7 +363,7 @@ def get_rotation(axes1, axes2):
 def get_centering(center1, center2):
     return center1-center2
 
-def get_ax_op(axes1, center1, axes2, center2)->Tuple[np.ndarray,np.ndarray]:
+def get_ax_op(axes1, center1, axes2, center2):
     # rotation
     r = get_rotation(axes1, axes2)
     # centering
@@ -373,7 +380,7 @@ def rev_ax_op(axes, center, op:tuple):
 
 def number_anarci(
     input_design:DesignData,
-    mhc_class:int,
+    mhc_class:int|None=None,
     code:str=AF2_CODE,
     scheme:str="imgt",
     )->DesignData:
@@ -418,27 +425,27 @@ def number_anarci(
     # check if chain indices correct
     if params["tcr_chain_index"][0]==params["tcr_chain_index"][1]:
         raise ValueError("TCR chains identical! Currently only 2 chain tcrs supported.")
-
-    # fix mhc chain index to longest non-tcr chain
-    chains = np.unique(input_design["chain_index"])
-    # mask out tcr chains
-    tcr_mask = ~(chains[:,None]==params["tcr_chain_index"][None,:]).any(axis=1)
-    chains = chains[tcr_mask]
-    # get chain lengths
-    chain_lengths =  (input_design["chain_index"][:,None] == chains[None,:]).sum(axis=0)
-    # take the n longest chain indices, where n the number of non-tcr chains -1 (for the peptide chain) 
-    # take all non-tcr-chains except for smalles (peptide, hopefully)
-    if mhc_class == 1:
-        params["mhc_chain_index"] = np.array(
-            [chains[r]
-            for r in np.argsort(chain_lengths)[:-(len(chains)-1):-1]],dtype=int
-        )
-    elif mhc_class==2:
-        params["mhc_chain_index"] = np.array(
-            [chains[r]
-            for r in np.argsort(chain_lengths)[:-len(chains):-1]],dtype=int
-        )
-    print(f"Classified chains {params['mhc_chain_index']} as MHC/antigen chains")
+    if not mhc_class is None:
+        # fix mhc chain index to longest non-tcr chain
+        chains = np.unique(input_design["chain_index"])
+        # mask out tcr chains
+        tcr_mask = ~(chains[:,None]==params["tcr_chain_index"][None,:]).any(axis=1)
+        chains = chains[tcr_mask]
+        # get chain lengths
+        chain_lengths =  (input_design["chain_index"][:,None] == chains[None,:]).sum(axis=0)
+        # take the n longest chain indices, where n the number of non-tcr chains -1 (for the peptide chain) 
+        # take all non-tcr-chains except for smalles (peptide, hopefully)
+        if mhc_class == 1:
+            params["mhc_chain_index"] = np.array(
+                [chains[r]
+                for r in np.argsort(chain_lengths)[:-(len(chains)-1):-1]],dtype=int
+            )
+        elif mhc_class==2:
+            params["mhc_chain_index"] = np.array(
+                [chains[r]
+                for r in np.argsort(chain_lengths)[:-len(chains):-1]],dtype=int
+            )
+        print(f"Classified chains {params['mhc_chain_index']} as MHC/antigen chains")
     return input_design, params
 
 def convert_chains(input_design:DesignData, d:dict|None=None):
@@ -484,12 +491,9 @@ def get_cdr_mask(
 def parse_structure(
     design,
     mhc_class,
-    scale=True,
     ):
 
     design = design.copy()
-    #if scale:
-    #    design = Scaler.fit_transform(design)
     # convert chain indices
     design,_ = convert_chains(design)
     design, params = number_anarci(design, mhc_class=mhc_class)
@@ -550,10 +554,10 @@ def parse_structure(
 
     return op
 
-def apply_atom_op(atom_positions:np.ndarray, op:np.ndarray):
+def apply_atom_op(atom_positions:np.ndarray, op:tuple, atom_mask=np._NoValue):
     atom_positions=atom_positions.squeeze()
     # center before rotation
-    a_center = atom_positions.mean(axis=0)
+    a_center = np.mean(atom_positions,axis=0, where=atom_mask)
     atom_positions -= a_center
     # rotate about 000
     atom_positions =  np.einsum("xy,...y", op[0],atom_positions)
@@ -561,17 +565,17 @@ def apply_atom_op(atom_positions:np.ndarray, op:np.ndarray):
     atom_positions = atom_positions-op[1] + a_center
     return atom_positions
 
-def rev_atom_op(atom_positions:np.ndarray, op:tuple):
+def rev_atom_op(atom_positions:np.ndarray, op:tuple, atom_mask=np._NoValue):
     atom_positions=atom_positions.squeeze()
     # center before rotation
-    a_center = atom_positions.mean(axis=0)
+    a_center = np.mean(atom_positions,axis=0, where=atom_mask)
     atom_positions -= a_center
     # rotate at origin
     atom_positions = np.einsum("...y, yx",atom_positions, op[0])
     return atom_positions + op[1] + a_center
 
 
-def apply_op(
+def apply_op_full_scaffold(
     design:DesignData,
     op:np.ndarray,
     chains:np.ndarray|Iterable,
@@ -585,16 +589,14 @@ def apply_op(
     chain_mask = (design["chain_index"][:,None]==chains[None,:]).any(axis=1)
     subset_design = design[chain_mask]
     atom_positions = np.array(subset_design["atom_positions"].squeeze())
-    # mask out empty positions
-    atom_mask = atom_positions==0
+    atom_mask = np.repeat(subset_design["atom_mask"][...,None],3, axis=-1).astype(bool)
     # get the operation
     if design_op is None:
-        design_op = parse_structure(design, mhc_class, scale=False)
+        design_op = parse_structure(design, mhc_class)
     # center and align on mhc axes
-    atom_positions = apply_atom_op(atom_positions, design_op)
+    atom_positions = apply_atom_op(atom_positions, design_op, atom_mask=atom_mask)
     # apply op in reverse to mimic binding position
-    atom_positions = rev_atom_op(atom_positions, op)
-    atom_positions[atom_mask]=0
+    atom_positions = rev_atom_op(atom_positions, op, atom_mask=atom_mask)
     # reinsert atom_positions
     subset_design = subset_design.update(atom_positions=jnp.array(atom_positions))
     subset_design.data = {k:jnp.array(v) for k,v in subset_design.data.items()}
@@ -603,7 +605,89 @@ def apply_op(
     #design = scaler.reverse(design)
     return design
 
-def get_mhc_ref(design, params):
+def apply_op(
+    design:DesignData,
+    op:np.ndarray,
+    chains:np.ndarray|Iterable|None=None,
+    reverse:bool=False
+    ):
+    design = design.copy()
+    if not chains is None:
+        chains = np.array(chains)
+        chain_mask = (design["chain_index"][:,None]==chains[None,:]).any(axis=1)
+        subset_design = design[chain_mask]
+    else:
+        subset_design = design
+    atom_positions = np.array(subset_design["atom_positions"].squeeze())
+    atom_mask = np.repeat(subset_design["atom_mask"][...,None],3, axis=-1).astype(bool)
+    # get the operation
+    # apply op in reverse to mimic binding position
+    if reverse:
+        atom_positions = rev_atom_op(atom_positions, op, atom_mask=atom_mask)
+    else:
+        atom_positions = apply_atom_op(atom_positions, op, atom_mask=atom_mask)
+    # reinsert atom_positions
+    subset_design = subset_design.update(atom_positions=jnp.array(atom_positions))
+    subset_design.data = {k:jnp.array(v) for k,v in subset_design.data.items()}
+    design.data = {k:jnp.array(v) for k,v in design.data.items()}
+    if chains is None:
+        return subset_design
+    else:
+        design[chain_mask] = subset_design
+        return design
+    
+def center_atom_op(atom_positions, axes, center):
+    atom_positions -= center
+    return np.einsum("ij,...j->...i",axes.T,atom_positions)
+
+def _apply_atom_op(atom_positions:np.ndarray, op:tuple, atom_mask=np._NoValue):
+    atom_positions=atom_positions.squeeze()
+    # center before rotation
+    #a_center = np.mean(atom_positions,axis=0, where=atom_mask)
+    #atom_positions -= a_center
+    # rotate about 000
+    atom_positions =  np.einsum("xy,...y", op[0],atom_positions)
+    atom_positions = atom_positions+op[1]
+    # restore to target center
+    return atom_positions
+
+def translate_pose(
+    design:DesignData,
+    target_pose:np.ndarray,
+    current_pose=None,
+    chains:np.ndarray|Iterable|None=None,
+    mhc_class=1,
+    ):
+    
+    design = design.copy()
+    if not chains is None:
+        chains = np.array(chains)
+        chain_mask = (design["chain_index"][:,None]==chains[None,:]).any(axis=1)
+        subset_design = design[chain_mask]
+    else:
+        subset_design = design
+    atom_positions = np.array(subset_design["atom_positions"].squeeze())
+    atom_mask = np.repeat(subset_design["atom_mask"][...,None],3, axis=-1).astype(bool)  # pyright: ignore
+    # get the operation
+    if current_pose is None:
+        # if no axes, center given, attempt to infer
+        current_pose = parse_structure(design, mhc_class=mhc_class)
+    # center
+    atom_positions = _center_atom_op(atom_positions, *current_pose)
+    atom_positions = _apply_atom_op(atom_positions, target_pose, atom_mask=atom_mask)
+    # reinsert atom_positions
+    subset_design = subset_design.update(atom_positions=jnp.array(atom_positions))
+    subset_design.data = {k:jnp.array(v) for k,v in subset_design.data.items()}
+    design.data = {k:jnp.array(v) for k,v in design.data.items()}
+    if chains is None:
+        return subset_design
+    else:
+        design[chain_mask] = subset_design
+        return design
+
+def get_mhc_ref(design, params, atoms:list=["CA"]):
+    order = ["N", "CA", "C", "O", "CB"]
+    atom_index = np.array([order.index(a) for a in atoms], dtype=np.int32)
     known_chains = np.concatenate([v for v in params.values()])
     peptide_chain_index = np.array([k for k in np.unique(design["chain_index"]) if k not in known_chains])
     if len(peptide_chain_index>1):
@@ -611,11 +695,13 @@ def get_mhc_ref(design, params):
         chain_lengths = (design["chain_index"][:,None]==peptide_chain_index[None,:]).sum(axis=0)
         peptide_chain_index = peptide_chain_index[np.argmin(chain_lengths)]
     peptide_mask = design["chain_index"]==peptide_chain_index
-    return design["atom_positions"][peptide_mask]
-def get_tcr_ref(design, params):
+    return design["atom_positions"][peptide_mask][:,atom_index,:]
+def get_tcr_ref(design, params, atoms:list=["CA"]):
+    order = ["N", "CA", "C", "O", "CB"]
+    atom_index = np.array([order.index(a) for a in atoms], dtype=np.int32)
     cdr_mask = get_cdr_mask(design, params["tcr_chain_index"], cdr_ids=[x for x in imgt_mapper.keys() if x.startswith("a")])
     cdr_mask = (cdr_mask + get_cdr_mask(design, params["tcr_chain_index"], cdr_ids=[x for x in imgt_mapper.keys() if x.startswith("b")]))>0
-    return design["atom_positions"][cdr_mask]
+    return design["atom_positions"][cdr_mask][:,atom_index,:]
 
 class Scaler:
     '''Simple z-scaler for DesignData objects'''
