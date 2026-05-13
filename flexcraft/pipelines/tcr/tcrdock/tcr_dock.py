@@ -22,6 +22,8 @@ import jax.numpy as jnp
 
 from scipy.spatial.transform import Rotation
 
+
+
 #---Alignments---
 
 ## 1-indexed
@@ -640,6 +642,10 @@ def center_atom_op(atom_positions, axes, center):
     atom_positions -= center
     return np.einsum("ij,...j->...i",axes.T,atom_positions)
 
+def uncenter_atom_op(atom_positions, axes, center):
+    atom_positions = np.einsum("ij,...j->...i",axes,atom_positions)
+    return atom_positions + center
+
 def _apply_atom_op(atom_positions:np.ndarray, op:tuple, atom_mask=np._NoValue):
     atom_positions=atom_positions.squeeze()
     # center before rotation
@@ -653,7 +659,7 @@ def _apply_atom_op(atom_positions:np.ndarray, op:tuple, atom_mask=np._NoValue):
 
 def translate_pose(
     design:DesignData,
-    target_pose:np.ndarray,
+    target_pose,
     current_pose=None,
     chains:np.ndarray|Iterable|None=None,
     mhc_class=1,
@@ -673,7 +679,7 @@ def translate_pose(
         # if no axes, center given, attempt to infer
         current_pose = parse_structure(design, mhc_class=mhc_class)
     # center
-    atom_positions = _center_atom_op(atom_positions, *current_pose)
+    atom_positions = center_atom_op(atom_positions, *current_pose)
     atom_positions = _apply_atom_op(atom_positions, target_pose, atom_mask=atom_mask)
     # reinsert atom_positions
     subset_design = subset_design.update(atom_positions=jnp.array(atom_positions))
@@ -696,6 +702,7 @@ def get_mhc_ref(design, params, atoms:list=["CA"]):
         peptide_chain_index = peptide_chain_index[np.argmin(chain_lengths)]
     peptide_mask = design["chain_index"]==peptide_chain_index
     return design["atom_positions"][peptide_mask][:,atom_index,:]
+
 def get_tcr_ref(design, params, atoms:list=["CA"]):
     order = ["N", "CA", "C", "O", "CB"]
     atom_index = np.array([order.index(a) for a in atoms], dtype=np.int32)
@@ -703,46 +710,182 @@ def get_tcr_ref(design, params, atoms:list=["CA"]):
     cdr_mask = (cdr_mask + get_cdr_mask(design, params["tcr_chain_index"], cdr_ids=[x for x in imgt_mapper.keys() if x.startswith("b")]))>0
     return design["atom_positions"][cdr_mask][:,atom_index,:]
 
-class Scaler:
-    '''Simple z-scaler for DesignData objects'''
-    def __init__(self, design=None):
-        if not design is None:
-            self.fit(design)
+def check_pose_direction(pose, ref):
+    axes = pose[0]
+    axis3, axis1 = check_direction(axes[:,-1], pose[1], ref, axes[:,0])
+    axes[:,-1] = axis3
+    axes[:,0] = axis1
+    return (axes, pose[1])
 
-    def fit(self, design):
-        design = design.copy()
-        atom_positions = np.array(design["atom_positions"])
-        self.mask = atom_positions==0
-        self.mean = atom_positions.mean(axis=(0,1), where=~self.mask)
-        #self.std = atom_positions.std(where=~self.mask)
+def superpose(tcr_pose, mhc_pose, tcr_design, mhc_design, mhc_class=1):
+    '''
+    Move Align designs on input poses.
+    Uses an adaptation of parse_structure to get mhc and tcr separately.
+    '''
+    # tcr
+    tcr_design, params = number_anarci(tcr_design, mhc_class=None)
+
+    tcr_target_pose=get_axes(
+        *[get_tcr_coords(
+            tcr_design,
+            np.array([chain])
+        ) for chain in params["tcr_chain_index"]]
+    )
+
+    target_tcr_params = dict(tcr_chain_index=np.unique(tcr_design["chain_index"]))
+    tcr_target_pose = check_pose_direction(tcr_target_pose, get_tcr_ref(tcr_design, target_tcr_params))
+    tcr_op = get_ax_op(
+        *tcr_target_pose,
+        *tcr_pose,
+    )
+    tcr_design = translate_pose(tcr_design, target_pose=tcr_pose, current_pose=tcr_target_pose, chains=None)
+
     
-    def transform(self,design):
-        design = design.copy()
-        atom_positions = np.array(design["atom_positions"])
-        atom_positions-=self.mean
-        #atom_positions /= self.std
-        atom_positions[self.mask]=0
-        return design.update(atom_positions=atom_positions)
+    # mhc
+    if mhc_class==1:
+        chains = np.unique(mhc_design["chain_index"])
+        chain_lengths = (mhc_design["chain_index"][:, None]==chains[None,:]).sum(axis=0)
+        target_mhc_params = dict(mhc_chain_index=chains[np.argmax(chain_lengths)][None])
+        mhc_positions = get_mhc1_positions(
+            design=mhc_design,
+            params=None,
+            )
+        mhc_coords_0 = get_mhc_coords(
+            design=mhc_design,
+            positions=mhc_positions[:6])
+        mhc_coords_1 = get_mhc_coords(
+            design=mhc_design,
+            positions=mhc_positions[6:])
+    elif mhc_class==2:
+        chain_lengths = (mhc_design["chain_index"][:, None]==chains[None,:]).sum(axis=0)
+        target_mhc_params = dict(mhc_chain_index=chains[np.argsort(chain_lengths)][::-1][:2])
+        mhc_positions = get_mhc2_positions(
+            design=mhc_design,
+            params=target_mhc_params,
+            db_files={
+                "A":Path("/home/ntbiotech/Documents/Current_projects/BinderDesign/TCRdock/tcrdock/db/both_class_2_A_chains_v2.fasta"),
+                "B":Path("/home/ntbiotech/Documents/Current_projects/BinderDesign/TCRdock/tcrdock/db/both_class_2_B_chains_v2.fasta")
+            },
+            blast_exe=Path("../../../ncbi-blast-2.17.0+/bin"),
+            )
+        mhc_coords_0 = get_mhc_coords(
+            design=mhc_design,
+            positions=mhc_positions["A"])
+        mhc_coords_1 = get_mhc_coords(
+            design=mhc_design,
+            positions=mhc_positions["B"])
+    else:
+        raise ValueError(f"Invalid mhc_class {mhc_class}!")
+    mhc_target_pose = get_axes(
+            mhc_coords_0,
+            mhc_coords_1,
+        )
+    mhc_target_pose = check_pose_direction(mhc_target_pose, get_mhc_ref(mhc_design, target_mhc_params))
+    
+    
+    mhc_design = translate_pose(mhc_design, target_pose=mhc_pose, current_pose=mhc_target_pose, chains=None)
 
-    @classmethod
-    def fit_transform(self,design):
-        design = design.copy()
-        atom_positions = np.array(design["atom_positions"])
-        mask = atom_positions==0
-        mean = atom_positions.mean(axis=(0,1), where=~mask)
-        #std = atom_positions.std(where=~mask)
-        atom_positions-= mean
-        #atom_positions /= std
-        atom_positions[mask]=0
-        return design.update(atom_positions=atom_positions)
+    return DesignData.concatenate((tcr_design, mhc_design), sep_chains=False, sep_batch=False)
 
-    def reverse(self,design):
-        design = design.copy()
-        atom_positions = np.array(design["atom_positions"])
-        #atom_positions *= self.std
-        atom_positions += self.mean
-        atom_positions[self.mask]=0
-        return design.update(atom_positions=atom_positions)
-        
-def norm_design(design):
-    return Scaler.fit_transform(design)
+def _parse_structure(
+    design,
+    mhc_class,
+    ):
+
+    design = design.copy()
+    # convert chain indices
+    design,_ = convert_chains(design)
+    design, params = number_anarci(design, mhc_class=mhc_class)
+
+    # get tcr stub
+    tcr_pose = get_axes(
+    *[get_tcr_coords(design, np.array([chain])) for chain in params["tcr_chain_index"]]
+    )
+    tcr_ref = get_tcr_ref(design, params)
+    tcr_pose = check_pose_direction(tcr_pose, tcr_ref)
+    # get mhc stub
+    if mhc_class==1:
+        mhc_positions = get_mhc1_positions(
+            design=design,
+            params=params,
+            )
+        mhc_coords_0 = get_mhc_coords(
+            design=design,
+            positions=mhc_positions[:6])
+        mhc_coords_1 = get_mhc_coords(
+            design=design,
+            positions=mhc_positions[6:])
+    elif mhc_class==2:
+        mhc_positions = get_mhc2_positions(
+            design=design,
+            params=params,
+            db_files={
+                "A":Path("/home/ntbiotech/Documents/Current_projects/BinderDesign/TCRdock/tcrdock/db/both_class_2_A_chains_v2.fasta"),
+                "B":Path("/home/ntbiotech/Documents/Current_projects/BinderDesign/TCRdock/tcrdock/db/both_class_2_B_chains_v2.fasta")
+            },
+            blast_exe=Path("../../../ncbi-blast-2.17.0+/bin"),
+            )
+        mhc_coords_0 = get_mhc_coords(
+            design=design,
+            positions=mhc_positions["A"])
+        mhc_coords_1 = get_mhc_coords(
+            design=design,
+            positions=mhc_positions["B"])
+    else:
+        raise ValueError(f"Invalid mhc_class {mhc_class}!")
+    print(mhc_positions)
+    mhc_pose = get_axes(
+            mhc_coords_0,
+            mhc_coords_1
+        )
+    mhc_ref = get_mhc_ref(design, params)
+    mhc_pose = check_pose_direction(mhc_pose, ref=mhc_ref)
+
+    return design, params, mhc_pose, tcr_pose
+
+def set_tcr_pose(design, target_pose, mhc_class):
+    '''Apply a '''
+
+    design, params, mhc_pose, tcr_pose = _parse_structure(design, mhc_class=mhc_class)
+
+    # align tcr to mhc_pose
+    design = translate_pose(
+        design,
+        target_pose=mhc_pose,
+        current_pose=tcr_pose,
+        chains=params["tcr_chain_index"],
+    )
+    origin_pose=(
+        np.array([[1,0,0], [0,1,0], [0,0,1]]), np.array([0,0,0])
+    )
+    # align to origin
+    design = translate_pose(
+        design,
+        target_pose=origin_pose,
+        current_pose=mhc_pose,
+        chains=None
+    )
+
+    return translate_pose(
+        design,
+        target_pose=target_pose,
+        current_pose=origin_pose,
+        chains=params["tcr_chain_index"]
+    )
+
+def get_tcr_pose(design, mhc_class):
+    '''Get the tcr pose, with mhc aligned to the origin.'''
+    
+    design, params, mhc_pose, tcr_pose = _parse_structure(design, mhc_class=mhc_class)
+
+    origin_pose=(
+        np.array([[1,0,0], [0,1,0], [0,0,1]]), np.array([0,0,0])
+    )
+
+    # get operation to align mhc to origin
+    center_mhc = get_ax_op(
+        *mhc_pose,
+        *origin_pose
+    )
+
+    return apply_ax_op(*tcr_pose, center_mhc)
