@@ -78,6 +78,8 @@ class ADAPT:
         trim:bool=True,
         chain_cache_len:int=650, # how long to pad for af
         redesign_all_cdrs=False,
+        templates:list|None=None,
+        template_mhc_class:list|int|None=None,
     ):
         '''
         Initialize ADAPT class for TCR design and refinement.
@@ -200,6 +202,10 @@ class ADAPT:
         )
 
         self.rmsd = RMSD()
+        self.templates = templates
+        self.template_mhc_class = template_mhc_class
+        if not self.templates is None:
+            self.prepare_templates(self.templates, self.template_mhc_class)
     
     def setup_boltz(self,
         **boltz_config
@@ -484,6 +490,13 @@ class ADAPT:
                 print("No is_target input. Not adding template!")
             else:
                 af_input = af_input.add_template(design, where=~is_target)
+
+        if not self.templates is None:
+            if not self.set_templates:
+                self.get_templates(design)
+            for template in self.templates:
+                template, _ = self.pad_design(template)
+                af_input = af_input.add_template(template, where=~is_target)
         
         if not templates is None:
             for t in templates:
@@ -1385,4 +1398,30 @@ class ADAPT:
         
         if self.trim:
             scaffold =  self.trim_design(scaffold)
+        self.set_templates = False
         return scaffold, scaffold_name
+    
+    def prepare_templates(
+        self,
+        templates:list[DesignData|Path],
+        template_mhc_class:int|list,
+        ):
+        from flexcraft.pipelines.tcr.tcr_dock import get_centered_tcr_pose
+        if isinstance(template_mhc_class, int):
+            template_mhc_class = [template_mhc_class, ]*len(templates)
+        templates = [self._convert_input_peptide(t) for t in templates]
+        tcr_poses = [get_centered_tcr_pose(template, mhc_class=mhc_class) for template,mhc_class zip(templates, template_mhc_class)]
+        self.templates = tcr_poses
+        self.template_mhc_class = template_mhc_class
+        self.set_templates = False
+        return tcr_poses
+    
+    def get_templates(
+        self,
+        design
+        ):
+        from flexcraft.pipelines.tcr.tcr_dock import set_tcr_pose
+        
+        self.set_templates = True
+        self.templates = [set_tcr_pose(design, target_pose=template, mhc_class=mhc_class) for template,mhc_class zip(self.templates, self.template_mhc_class)]
+        return self.templates
