@@ -1,6 +1,8 @@
 from pathlib import Path
 from typing import List, Tuple, Optional, Dict, Iterable, Callable
 
+from tree import K
+
 
 def load_data(out_dir:str|Path=Path("./data/adapt/input_data"),
     url = "https://zenodo.org/records/17488258/files/",
@@ -155,7 +157,7 @@ def collect_results(directory:Path, pattern="**/*", in_file:str="scores.csv", sa
         return directory/(in_file.split(".")[0]+"collected.csv")
     return df
 
-def cdr_parser(cdrs:str|None, random:bool=False)->Callable:
+def cdr_parser(cdrs:str|None, random:bool=False, cdr_length:int|tuple|None=None, patience:int=100)->Callable:
     '''
     Creates a generator for cdr dicts from either an existing path or a json encoded string.
     Always returns None, if creating the generator fails.
@@ -170,6 +172,7 @@ def cdr_parser(cdrs:str|None, random:bool=False)->Callable:
     elif Path(cdrs).exists():
         cdr_file = open(cdrs, "r")
         keys = cdr_file.readline().strip("\n").split("\t")
+        keys = [i[-1]+i[:-1] for i in keys]
         if random:
             file_size = Path(cdrs).stat().st_size
             def _inner():
@@ -177,24 +180,27 @@ def cdr_parser(cdrs:str|None, random:bool=False)->Callable:
                 cdr_file.seek(nprandom.randint(0,file_size-200), 0)
                 cdr_file.readline()
                 return {
-                        i[-1]+i[:-1]:n
-                        for i,n in zip(keys, cdr_file.readline().strip("\n").split("\t"))
+                        k:n
+                        for k,n in zip(keys, cdr_file.readline().strip("\n").split("\t"))
                     }
         else:
             def _inner():
                 return {
-                        i[-1]+i[:-1]:n
+                        i:n
                         for i,n in zip(keys, cdr_file.readline().strip("\n").split("\t"))
                     }
     else:
         try:
             out = json.loads(cdrs)
             if isinstance(out, dict):
+                keys = [k for k in out.keys()]
                 def _inner():
                     return out
             elif isinstance(out, list):
                 global cdr_iter
                 cdr_iter=-1
+                assert isinstance(out[cdr_iter], dict)
+                keys = [k for k in out[1].keys()]
                 if random:
                     def _inner():
                         return out[nprandom.randint(0,len(out))]
@@ -204,8 +210,19 @@ def cdr_parser(cdrs:str|None, random:bool=False)->Callable:
                         cdr_iter+=1
                         return out[cdr_iter]
         except json.JSONDecodeError:
-            print(f"Not able to interpret cdrs {cdrs}! Returning None!")
-            def _inner():
-                return None
-    
+            raise ValueError(f"Not able to interpret cdrs {cdrs}!")
+
+    if not cdr_length is None:
+        if isinstance(cdr_length, int):
+            cdr_length = (cdr_length, cdr_length)
+        def _fixed_length_inner():
+            cdrs = _inner()
+            n=1
+            while len(cdrs[keys[0]])!=cdr_length[0] or len(cdrs[keys[1]])!=cdr_length[1]:
+                cdrs = _inner()
+                n+=1
+                if n>patience:
+                    raise ValueError(f"No cdr of fixed length {cdr_length} found for {patience} runs")
+            return cdrs
+        return _fixed_length_inner
     return _inner

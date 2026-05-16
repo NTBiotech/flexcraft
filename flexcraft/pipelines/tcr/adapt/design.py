@@ -20,6 +20,7 @@ parser.add_argument("--ab", action="store_true")
 parser.add_argument("--out_dir", type=Path, default=None)
 parser.add_argument("--random_cdr", action="store_true")
 parser.add_argument("--design_steps", type=int, default=1, help="Number of design attempts for each binder.")
+parser.add_argument("--cdr_length", type=int, default=None, help="Pin the cdr length to a specific int")
 
 
 parser.add_argument("--config", default="./config.json",)
@@ -32,7 +33,7 @@ config = json.load(open(args.config, "r"))
 mhcs = list(args.mhc_allele)
 peptides = list(args.peptide)
 binders = list(args.binder)
-cdrs_gen = cdr_parser(args.cdrs, random=args.random_cdr)
+cdrs_gen = cdr_parser(args.cdrs, random=args.random_cdr, cdr_length=args.cdr_length, patience=100)
 if not args.out_dir is None:
     config.update(out_dir=args.out_dir)
 
