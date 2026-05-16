@@ -606,37 +606,6 @@ def apply_op_full_scaffold(
     design[chain_mask] = subset_design
     #design = scaler.reverse(design)
     return design
-
-def apply_op(
-    design:DesignData,
-    op:np.ndarray,
-    chains:np.ndarray|Iterable|None=None,
-    reverse:bool=False
-    ):
-    design = design.copy()
-    if not chains is None:
-        chains = np.array(chains)
-        chain_mask = (design["chain_index"][:,None]==chains[None,:]).any(axis=1)
-        subset_design = design[chain_mask]
-    else:
-        subset_design = design
-    atom_positions = np.array(subset_design["atom_positions"].squeeze())
-    atom_mask = np.repeat(subset_design["atom_mask"][...,None],3, axis=-1).astype(bool)
-    # get the operation
-    # apply op in reverse to mimic binding position
-    if reverse:
-        atom_positions = rev_atom_op(atom_positions, op, atom_mask=atom_mask)
-    else:
-        atom_positions = apply_atom_op(atom_positions, op, atom_mask=atom_mask)
-    # reinsert atom_positions
-    subset_design = subset_design.update(atom_positions=jnp.array(atom_positions))
-    subset_design.data = {k:jnp.array(v) for k,v in subset_design.data.items()}
-    design.data = {k:jnp.array(v) for k,v in design.data.items()}
-    if chains is None:
-        return subset_design
-    else:
-        design[chain_mask] = subset_design
-        return design
     
 def center_atom_op(atom_positions, axes, center):
     atom_positions -= center
@@ -787,23 +756,12 @@ def superpose(tcr_pose, mhc_pose, tcr_design, mhc_design, mhc_class=1):
 
     return DesignData.concatenate((tcr_design, mhc_design), sep_chains=False, sep_batch=False)
 
-def _parse_structure(
-    design,
-    mhc_class,
-    ):
+def get_mhc_pose(design, mhc_class, params:dict|None=None):
 
     design = design.copy()
-    # convert chain indices
-    design,_ = convert_chains(design)
-    design, params = number_anarci(design, mhc_class=mhc_class)
-
-    # get tcr stub
-    tcr_pose = get_axes(
-    *[get_tcr_coords(design, np.array([chain])) for chain in params["tcr_chain_index"]]
-    )
-    tcr_ref = get_tcr_ref(design, params)
-    tcr_pose = check_pose_direction(tcr_pose, tcr_ref)
-    # get mhc stub
+    if params is None:
+        design,_ = convert_chains(design)
+        design, params = number_anarci(design, mhc_class=mhc_class)
     if mhc_class==1:
         mhc_positions = get_mhc1_positions(
             design=design,
@@ -840,11 +798,42 @@ def _parse_structure(
         )
     mhc_ref = get_mhc_ref(design, params)
     mhc_pose = check_pose_direction(mhc_pose, ref=mhc_ref)
+    return mhc_pose
+
+def get_tcr_pose(design, params:dict|None=None):
+    design = design.copy()
+    # convert chain indices
+    if params is None:
+        design,_ = convert_chains(design)
+        design, params = number_anarci(design, mhc_class=None)
+
+    # get tcr stub
+    tcr_pose = get_axes(
+    *[get_tcr_coords(design, np.array([chain])) for chain in params["tcr_chain_index"]]
+    )
+    tcr_ref = get_tcr_ref(design, params)
+    tcr_pose = check_pose_direction(tcr_pose, tcr_ref)
+    return tcr_pose
+
+def _parse_structure(
+    design,
+    mhc_class,
+    ):
+
+    design,_ = convert_chains(design)
+    design, params = number_anarci(design, mhc_class=mhc_class)
+    tcr_pose = get_tcr_pose(design, params=params)
+    # get mhc stub
+    mhc_pose = get_mhc_pose(design, mhc_class=mhc_class, params=params)
 
     return design, params, mhc_pose, tcr_pose
 
+origin_pose=(
+        np.array([[1,0,0], [0,1,0], [0,0,1]]), np.array([0,0,0])
+    )
+
 def set_tcr_pose(design, target_pose, mhc_class):
-    '''Apply a '''
+    '''Apply a tcr pose to a DesignData object.'''
 
     design, params, mhc_pose, tcr_pose = _parse_structure(design, mhc_class=mhc_class)
 
@@ -855,9 +844,7 @@ def set_tcr_pose(design, target_pose, mhc_class):
         current_pose=tcr_pose,
         chains=params["tcr_chain_index"],
     )
-    origin_pose=(
-        np.array([[1,0,0], [0,1,0], [0,0,1]]), np.array([0,0,0])
-    )
+    
     # align to origin
     design = translate_pose(
         design,
@@ -873,19 +860,25 @@ def set_tcr_pose(design, target_pose, mhc_class):
         chains=params["tcr_chain_index"]
     )
 
-def get_tcr_pose(design, mhc_class):
+def get_centered_tcr_pose(design, mhc_class):
     '''Get the tcr pose, with mhc aligned to the origin.'''
     
-    design, params, mhc_pose, tcr_pose = _parse_structure(design, mhc_class=mhc_class)
+    mhc_pose = get_mhc_pose(design, mhc_class=mhc_class)
 
+    design = center_design(design, mhc_pose)
+    
+    tcr_pose = get_tcr_pose(design)
+
+    return tcr_pose
+
+def center_design(design, current_pose):
     origin_pose=(
         np.array([[1,0,0], [0,1,0], [0,0,1]]), np.array([0,0,0])
     )
-
-    # get operation to align mhc to origin
-    center_mhc = get_ax_op(
-        *mhc_pose,
-        *origin_pose
+    # align to origin
+    return translate_pose(
+        design,
+        target_pose=origin_pose,
+        current_pose=current_pose,
+        chains=None
     )
-
-    return apply_ax_op(*tcr_pose, center_mhc)
