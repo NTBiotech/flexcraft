@@ -1,3 +1,31 @@
+'''
+# TCR Dock
+Module adapting TCRDock by:
+Bradley, P., 2023. Structure-based prediction of T cell receptor:peptide-MHC interactions. eLife 12, e82813. https://doi.org/10.7554/eLife.82813
+
+## Notes:
+### Alignment
+For determining reference position coordinates,
+MHC class 1 structures are aligned to a reference sequence using Biopythons pairwise aligner,
+MHC class 2 structures are aligned to a blast database using NCBI's blastp.
+For MHC class 2 structures, blast_kwargs should contain:
+- "blast_exe": a path to the NCBI blast binary directory
+- a dict containing "A" and "B" with fasta files for the tcr-chains (the blast database is constructed automatically for the first time)
+-> NCBI BLAST is available at https://ftp.ncbi.nlm.nih.gov/blast/executables/blast+/latest/
+Example:
+    blast_kwargs = {
+        db_files={
+                "A":Path("../data/tcr_dock/both_class_2_A_chains_v2.fasta"),
+                "B":Path("../data/tcr_dock/both_class_2_B_chains_v2.fasta")
+            },
+        blast_exe=Path("../ncbi-blast-2.17.0+/bin"),}
+### Main Functions
+The main functions of this module, intended for application, are:
+- superpose(): This function can be used to construct a tcr-mhc complex from separate DesignData objects using input poses for mhc and tcr.
+- get_centered_tcr_pose(): This computes the axes and center of the tcr after aligning the mhc to the origin.
+- set_tcr_pose(): Use this function to move the TCR of a DesignData object to a desired pose from get_centered_tcr_pose(). (This only works with centered TCR poses.)
+'''
+
 
 from shutil import ExecError
 import sys
@@ -213,7 +241,7 @@ def get_mhc2_positions(
 
 #--- Geometry ---
 
-def centroid(points:np.ndarray, where=np._NoValue):
+def centroid(points:np.ndarray, where=None):
     '''Calculate centroid of points in 3d space.'''
     return np.mean(points,axis=0, where=where)
 def proj(a:np.ndarray,b:np.ndarray):
@@ -380,12 +408,12 @@ def rev_ax_op(axes, center, op:tuple):
 
 #---wrapper functions---
 
-def number_anarci(
+def _number_anarci(
     input_design:DesignData,
     mhc_class:int|None=None,
     code:str=AF2_CODE,
     scheme:str="imgt",
-    )->DesignData:
+    ):
     '''
     Basic numbering of AB or TCR sequences.
     Returns:
@@ -450,7 +478,7 @@ def number_anarci(
         print(f"Classified chains {params['mhc_chain_index']} as MHC/antigen chains")
     return input_design, params
 
-def convert_chains(input_design:DesignData, d:dict|None=None):
+def _convert_chains(input_design:DesignData, d:dict|None=None):
     if d is None:
         d = {}
         for x,y in zip(np.sort(np.unique(input_design["chain_index"])), range(len(np.unique(input_design["chain_index"])))):
@@ -459,7 +487,7 @@ def convert_chains(input_design:DesignData, d:dict|None=None):
     design = input_design.update(chain_index=np.array([d[int(x)] for x in input_design["chain_index"]]))
     return design, d
 
-def get_cdr_mask(
+def _get_cdr_mask(
         input_design:DesignData,
         tcr_chain_index:int,
         cdr_ids:Iterable[str]=[x for x in imgt_mapper.keys() if x.startswith("a")],
@@ -493,12 +521,13 @@ def get_cdr_mask(
 def parse_structure(
     design,
     mhc_class,
+    blast_kwargs:dict={},
     ):
 
     design = design.copy()
     # convert chain indices
-    design,_ = convert_chains(design)
-    design, params = number_anarci(design, mhc_class=mhc_class)
+    design,_ = _convert_chains(design)
+    design, params = _number_anarci(design, mhc_class=mhc_class)
 
     # get tcr stub
     tcr_axes, tcr_center = get_axes(
@@ -524,11 +553,7 @@ def parse_structure(
         mhc_positions = get_mhc2_positions(
             design=design,
             params=params,
-            db_files={
-                "A":Path("/home/ntbiotech/Documents/Current_projects/BinderDesign/TCRdock/tcrdock/db/both_class_2_A_chains_v2.fasta"),
-                "B":Path("/home/ntbiotech/Documents/Current_projects/BinderDesign/TCRdock/tcrdock/db/both_class_2_B_chains_v2.fasta")
-            },
-            blast_exe=Path("../../../ncbi-blast-2.17.0+/bin"),
+            **blast_kwargs,
             )
         mhc_coords_0 = get_mhc_coords(
             design=design,
@@ -675,8 +700,8 @@ def get_mhc_ref(design, params, atoms:list=["CA"]):
 def get_tcr_ref(design, params, atoms:list=["CA"]):
     order = ["N", "CA", "C", "O", "CB"]
     atom_index = np.array([order.index(a) for a in atoms], dtype=np.int32)
-    cdr_mask = get_cdr_mask(design, params["tcr_chain_index"], cdr_ids=[x for x in imgt_mapper.keys() if x.startswith("a")])
-    cdr_mask = (cdr_mask + get_cdr_mask(design, params["tcr_chain_index"], cdr_ids=[x for x in imgt_mapper.keys() if x.startswith("b")]))>0
+    cdr_mask = _get_cdr_mask(design, params["tcr_chain_index"], cdr_ids=[x for x in imgt_mapper.keys() if x.startswith("a")])
+    cdr_mask = (cdr_mask + _get_cdr_mask(design, params["tcr_chain_index"], cdr_ids=[x for x in imgt_mapper.keys() if x.startswith("b")]))>0
     return design["atom_positions"][cdr_mask][:,atom_index,:]
 
 def check_pose_direction(pose, ref):
@@ -686,13 +711,22 @@ def check_pose_direction(pose, ref):
     axes[:,0] = axis1
     return (axes, pose[1])
 
-def superpose(tcr_pose, mhc_pose, tcr_design, mhc_design, mhc_class=1):
+def superpose(
+    tcr_pose:np.ndarray,
+    mhc_pose:np.ndarray,
+    tcr_design:DesignData,
+    mhc_design:DesignData,
+    mhc_class:int=1,
+    blast_kwargs:dict={}
+    ):
     '''
     Move Align designs on input poses.
     Uses an adaptation of parse_structure to get mhc and tcr separately.
+    Notes:
+    - For origin-centered tcr-poses, use origin_pose as mhc_pose.
     '''
     # tcr
-    tcr_design, params = number_anarci(tcr_design, mhc_class=None)
+    tcr_design, params = _number_anarci(tcr_design, mhc_class=None)
 
     tcr_target_pose=get_axes(
         *[get_tcr_coords(
@@ -731,11 +765,7 @@ def superpose(tcr_pose, mhc_pose, tcr_design, mhc_design, mhc_class=1):
         mhc_positions = get_mhc2_positions(
             design=mhc_design,
             params=target_mhc_params,
-            db_files={
-                "A":Path("/home/ntbiotech/Documents/Current_projects/BinderDesign/TCRdock/tcrdock/db/both_class_2_A_chains_v2.fasta"),
-                "B":Path("/home/ntbiotech/Documents/Current_projects/BinderDesign/TCRdock/tcrdock/db/both_class_2_B_chains_v2.fasta")
-            },
-            blast_exe=Path("../../../ncbi-blast-2.17.0+/bin"),
+            **blast_kwargs,
             )
         mhc_coords_0 = get_mhc_coords(
             design=mhc_design,
@@ -756,12 +786,11 @@ def superpose(tcr_pose, mhc_pose, tcr_design, mhc_design, mhc_class=1):
 
     return DesignData.concatenate((tcr_design, mhc_design), sep_chains=False, sep_batch=False)
 
-def get_mhc_pose(design, mhc_class, params:dict|None=None):
-
+def get_mhc_pose(design, mhc_class, params:dict|None=None, blast_kwargs:dict={}):
     design = design.copy()
     if params is None:
-        design,_ = convert_chains(design)
-        design, params = number_anarci(design, mhc_class=mhc_class)
+        design,_ = _convert_chains(design)
+        design, params = _number_anarci(design, mhc_class=mhc_class)
     if mhc_class==1:
         mhc_positions = get_mhc1_positions(
             design=design,
@@ -777,11 +806,7 @@ def get_mhc_pose(design, mhc_class, params:dict|None=None):
         mhc_positions = get_mhc2_positions(
             design=design,
             params=params,
-            db_files={
-                "A":Path("/home/ntbiotech/Documents/Current_projects/BinderDesign/TCRdock/tcrdock/db/both_class_2_A_chains_v2.fasta"),
-                "B":Path("/home/ntbiotech/Documents/Current_projects/BinderDesign/TCRdock/tcrdock/db/both_class_2_B_chains_v2.fasta")
-            },
-            blast_exe=Path("../../../ncbi-blast-2.17.0+/bin"),
+            **blast_kwargs,
             )
         mhc_coords_0 = get_mhc_coords(
             design=design,
@@ -804,8 +829,8 @@ def get_tcr_pose(design, params:dict|None=None):
     design = design.copy()
     # convert chain indices
     if params is None:
-        design,_ = convert_chains(design)
-        design, params = number_anarci(design, mhc_class=None)
+        design,_ = _convert_chains(design)
+        design, params = _number_anarci(design, mhc_class=None)
 
     # get tcr stub
     tcr_pose = get_axes(
@@ -820,8 +845,8 @@ def _parse_structure(
     mhc_class,
     ):
 
-    design,_ = convert_chains(design)
-    design, params = number_anarci(design, mhc_class=mhc_class)
+    design,_ = _convert_chains(design)
+    design, params = _number_anarci(design, mhc_class=mhc_class)
     tcr_pose = get_tcr_pose(design, params=params)
     # get mhc stub
     mhc_pose = get_mhc_pose(design, mhc_class=mhc_class, params=params)
