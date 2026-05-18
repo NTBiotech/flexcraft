@@ -241,9 +241,9 @@ def get_mhc2_positions(
 
 #--- Geometry ---
 
-def centroid(points:np.ndarray, where=None):
+def centroid(points:np.ndarray):
     '''Calculate centroid of points in 3d space.'''
-    return np.mean(points,axis=0, where=where)
+    return np.mean(points,axis=0)
 def proj(a:np.ndarray,b:np.ndarray):
     '''Projection of vector a onto vector b'''
     return (np.dot(a,b)/np.linalg.norm(b))*b
@@ -816,7 +816,6 @@ def get_mhc_pose(design, mhc_class, params:dict|None=None, blast_kwargs:dict={})
             positions=mhc_positions["B"])
     else:
         raise ValueError(f"Invalid mhc_class {mhc_class}!")
-    print(mhc_positions)
     mhc_pose = get_axes(
             mhc_coords_0,
             mhc_coords_1

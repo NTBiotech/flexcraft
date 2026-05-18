@@ -32,7 +32,7 @@ from flexcraft.sequence.aa_codes import AF2_CODE, decode
 from flexcraft.sequence.mpnn import make_pmpnn
 from flexcraft.sequence.sample import *
 
-from flexcraft.pipelines.tcr.utils import print_dd
+from flexcraft.pipelines.tcr.utils import print_dd, clean_chothia
 from filelock import FileLock
 
 from colabdesign.af.alphafold.model import utils as af_utils
@@ -204,9 +204,10 @@ class ADAPT:
         self.rmsd = RMSD()
         self.templates = templates
         self.template_mhc_class = template_mhc_class
-        if not self.templates is None:
+        if not self.templates is None and not self.template_mhc_class is None:
             self.prepare_templates(self.templates, self.template_mhc_class)
-    
+        self.save_templates = True
+
     def setup_boltz(self,
         **boltz_config
         ):
@@ -491,13 +492,11 @@ class ADAPT:
             else:
                 af_input = af_input.add_template(design, where=~is_target)
 
-        if not self.templates is None:
-            if not self.set_templates:
-                self.get_templates(design)
+        if self.get_templates(design):
             for template in self.templates:
                 template, _ = self.pad_design(template)
                 af_input = af_input.add_template(template, where=~is_target)
-        
+
         if not templates is None:
             for t in templates:
                 t, _ = self.pad_design(t)
@@ -1312,11 +1311,13 @@ class ADAPT:
             print(f"Classified chains {self.mhc_chain_index} as MHC/antigen chains")
         return input_design
 
-    def _convert_input_peptide(self, peptide:DesignData|Path|str|None)->DesignData|None:
+    def _convert_input_peptide(self, peptide:DesignData|Path|str|None):
+
         if isinstance(peptide, (DesignData|None)):
             return peptide
 
         elif isinstance(peptide, Path):
+            peptide = clean_chothia(peptide)
             if not peptide.suffix in [".pdb", ".cif"]:
                 peptide = peptide.with_suffix(".pdb")
             if peptide.parent != self.in_dir:
@@ -1403,25 +1404,33 @@ class ADAPT:
     
     def prepare_templates(
         self,
-        templates:list[DesignData|Path],
+        templates:list[DesignData|str|Path],
         template_mhc_class:int|list,
         ):
-        from flexcraft.pipelines.tcr.tcr_dock import get_centered_tcr_pose
+        from flexcraft.pipelines.tcr.tcrdock import get_centered_tcr_pose
         if isinstance(template_mhc_class, int):
             template_mhc_class = [template_mhc_class, ]*len(templates)
         templates = [self._convert_input_peptide(t) for t in templates]
-        tcr_poses = [get_centered_tcr_pose(template, mhc_class=mhc_class) for template,mhc_class zip(templates, template_mhc_class)]
+        tcr_poses = [get_centered_tcr_pose(template, mhc_class=mhc_class) for template,mhc_class in zip(templates, template_mhc_class)]
         self.templates = tcr_poses
         self.template_mhc_class = template_mhc_class
         self.set_templates = False
         return tcr_poses
-    
+
     def get_templates(
         self,
         design
         ):
-        from flexcraft.pipelines.tcr.tcr_dock import set_tcr_pose
+        '''Check if templates are available and set tcr poses if necessary'''
+        if self.set_templates:
+            return True
         
-        self.set_templates = True
-        self.templates = [set_tcr_pose(design, target_pose=template, mhc_class=mhc_class) for template,mhc_class zip(self.templates, self.template_mhc_class)]
-        return self.templates
+        if not self.templates is None and not self.template_mhc_class is None:
+            from flexcraft.pipelines.tcr.tcrdock import set_tcr_pose
+            self.set_templates = True
+            self.templates = [set_tcr_pose(design, target_pose=template, mhc_class=mhc_class) for template,mhc_class in zip(self.templates, self.template_mhc_class)]
+            if self.save_templates:
+                for n,t in enumerate(self.templates):
+                    t.save_pdb(self.out_dir/f"template_{n}.pdb")
+            return self.templates
+        return False

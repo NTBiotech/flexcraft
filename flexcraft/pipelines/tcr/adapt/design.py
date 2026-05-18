@@ -17,24 +17,36 @@ parser.add_argument("--mhc_allele", nargs="*", default=[],)
 parser.add_argument("--binder", nargs="*", default=[],)
 parser.add_argument("--cdrs", type=str, default=None)
 parser.add_argument("--ab", action="store_true")
-parser.add_argument("--out_dir", type=Path, default=None)
+parser.add_argument("--out_dir", type=Path, default=Path("."))
 parser.add_argument("--random_cdr", action="store_true")
-parser.add_argument("--design_steps", type=int, default=1, help="Number of design attempts for each binder.")
-parser.add_argument("--cdr_length", type=int, default=None, help="Pin the cdr length to a specific int")
+parser.add_argument("--design_steps", type=int, default=1,
+    help="Number of design attempts for each binder.")
+parser.add_argument("--cdr_length", type=int, default=None,
+    help="Pin the cdr length to a specific int")
+parser.add_argument("--templates", nargs="*", default=[],
+    help="Template TCR-MHC-complexes in pdb files. Directory as input supported.\
+        Also set --template_mhc_class when using this feature. Overwrites config templates!")
+parser.add_argument("--template_mhc_class", nargs="*", default=[1],
+    help="Add MHC class of templates. If one element, is broadcasted to all templates.")
 
 
 parser.add_argument("--config", default="./config.json",)
 
+
+# parse arguments
 args = parser.parse_args()
-            
-
-
 config = json.load(open(args.config, "r"))
 mhcs = list(args.mhc_allele)
 peptides = list(args.peptide)
 binders = list(args.binder)
+out_dir = args.out_dir
+_templates = list(args.templates)
+_template_mhc_class = list(args.template_mhc_class)
+
+# cdr generator
 cdrs_gen = cdr_parser(args.cdrs, random=args.random_cdr, cdr_length=args.cdr_length, patience=100)
-if not args.out_dir is None:
+# out directory
+if not args.out_dir == Path("."):
     config.update(out_dir=args.out_dir)
 
 if (len(mhcs)>1) and (len(peptides)>1):
@@ -42,9 +54,30 @@ if (len(mhcs)>1) and (len(peptides)>1):
     if not out_dir.exists():
         out_dir.mkdir()
 
+templates = []
+for template in _templates:
+    template = Path(template)
+    if template.stem.endswith("_clean"):
+        continue
+    if not template.exists():
+        raise FileNotFoundError(f"Template {template} not found!")
+    elif template.is_dir():
+        templates.extend([p for p in template.glob("*.pdb")])
+    else:
+        templates.append(template)
+if len(templates)>0:
+    config.update(templates=templates)
+    if len(_template_mhc_class)>=1:
+        if len(_template_mhc_class)==1:
+            template_mhc_class = _template_mhc_class[0]
+        else:
+            template_mhc_class = _template_mhc_class
+        config.update(template_mhc_class=template_mhc_class)
+print(f'Templates: {config.get("templates", "No templates")}')
+
 for mhc, peptide in zip(mhcs, peptides):
     if (len(mhcs)>1) and (len(peptides)>1):
-        config.update({"out_dir":out_dir+f"{mhc}_{peptide}"})  # pyright: ignore[reportOperatorIssue]
+        config.update({"out_dir":Path(out_dir)/f"{mhc}_{peptide}"})  # pyright: ignore[reportOperatorIssue]
 
     adapt = ADAPT(
         **config

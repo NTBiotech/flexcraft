@@ -54,7 +54,7 @@ def clean_chothia(file)->Path:
     '''Removes annotations, duplicate chains and HETATMs.'''
     if isinstance(file, str):
         file = Path(file)
-    if file.name.endswith("clean.pdb"):
+    if file.name.endswith("_clean.pdb"):
         print("File already clean")
         return file
     out_path = Path(file.with_suffix("").__str__()+"_clean.pdb")
