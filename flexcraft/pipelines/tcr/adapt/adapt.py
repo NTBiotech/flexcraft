@@ -1432,5 +1432,5 @@ class ADAPT:
             if self.save_templates:
                 for n,t in enumerate(self.templates):
                     t.save_pdb(self.out_dir/f"template_{n}.pdb")
-            return self.templates
+            return True
         return False

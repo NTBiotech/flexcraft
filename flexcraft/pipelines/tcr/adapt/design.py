@@ -58,11 +58,12 @@ templates = []
 for template in _templates:
     template = Path(template)
     if template.stem.endswith("_clean"):
+        print(f"Skipping clean {template}")
         continue
     if not template.exists():
         raise FileNotFoundError(f"Template {template} not found!")
     elif template.is_dir():
-        templates.extend([p for p in template.glob("*.pdb")])
+        templates.extend([p for p in template.glob("*.pdb") if not p.stem.endswith("_clean")])
     else:
         templates.append(template)
 if len(templates)>0:
