@@ -42,16 +42,20 @@ def main():
     )
 
     parser.add_argument("--structure_table", type=Path)
-    parser.add_argument("--out_dir", type=Path)
+    parser.add_argument("--out_dir", type=Path, default=None)
     parser.add_argument("--exec", action="store_true")
     parser.add_argument("--gpu", type=int, default=0)
+    parser.add_argument("--chain_number", type=int, default=5)
 
 
 
     args = parser.parse_args()
-    table_path = (args.structure_table).resolve()
-    out_dir = (args.out_dir).resolve()
+    if args.out_dir is None:
+        out_dir = Path(f"./clustering_{datetime.now().strftime('%Y-%d-%b_%H:%M:%S')}").resolve()
+    else:
+        out_dir = (args.out_dir).resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
+    table_path = (args.structure_table).resolve()
     table = pd.read_csv(table_path)
     table = table[table["Bound to TCR"].astype(bool)]
     table = table[table["Species"]=="Human"]
@@ -59,7 +63,7 @@ def main():
     table = table.sort_values("Release date", ascending=False)[:400]
 
 
-    build_database(table, out_dir/"pdb_files", ab=False, chain_number=5)
+    build_database(table, out_dir/"pdb_files", ab=False, chain_number=args.chain_number)
     cmd = f"foldseek easy-cluster {out_dir/'pdb_files'} {out_dir/'cluster_result'} $TMP -c 0.9 --gpu {args.gpu}"
     if args.exec:
         import os
@@ -79,3 +83,6 @@ def main():
     rep_dir.mkdir()
     for pdb_id in reps:
         Path(out_dir/f"pdb_files/{pdb_id}.pdb").rename(out_dir/f"representative/{pdb_id}.pdb")
+
+if __name__ =="__main__":
+    main()
