@@ -305,20 +305,28 @@ def number_anarci(
                 [chains[r]
                 for r in np.argsort(chain_lengths)[:-(len(chains)-1):-1]],dtype=int
             )
+            sec_mhc = chains[np.argsort(chain_lengths)[::-1][1]]
         elif mhc_class==2:
             params["mhc_chain_index"] = np.array(
                 [chains[r]
                 for r in np.argsort(chain_lengths)[:-len(chains):-1]],dtype=int
             )
         if trim:
-            input_design = trim_mhc(input_design, params["mhc_chain_index"])
+            target_chains=np.array(
+                [chains[r]
+                for r in np.argsort(chain_lengths)[:-len(chains):-1]],dtype=int
+            )
+            target_length=90
+            if mhc_class == 1:
+                target_length=180
+            input_design = trim_mhc(input_design, params["mhc_chain_index"], target_length=target_length)
         print(f"Classified chains {params['mhc_chain_index']} as MHC/antigen chains")
     print("Classified params: ", params)
     return input_design, params
 
 def trim_mhc(input_design, mhc_chains, target_length=90):
     print("trim_design mhc_chains",mhc_chains)
-    for chain in mhc_chains:
+    for n, chain in enumerate(mhc_chains):
         print("trim_design chain",chain)
         chain_mask = input_design["chain_index"]==chain
         trim_mask = np.ones(len(input_design["aa"]), dtype=np.bool_)
@@ -326,8 +334,7 @@ def trim_mhc(input_design, mhc_chains, target_length=90):
             print(f"WARNING! Chain {chain} smaller than 110 residues. Removing chain fully!")
             trim_mask[chain_mask]=False
         else:
-            trim_mask[chain_mask] = np.concatenate((np.ones(90), np.zeros(int(chain_mask.sum()-90))))
+            trim_mask[chain_mask] = np.concatenate((np.ones(target_length), np.zeros(int(chain_mask.sum()-target_length))))[::(1-(n*2))]
             input_design = input_design[trim_mask]
-            print(f"Trimming chain {chain} to 90 AAs.")
+            print(f"Trimming chain {chain} to {target_length} AAs.")
         return input_design
-
