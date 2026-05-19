@@ -40,8 +40,8 @@ mhcs = list(args.mhc_allele)
 peptides = list(args.peptide)
 binders = list(args.binder)
 out_dir = args.out_dir
-_templates = list(args.templates)
-_template_mhc_class = list(args.template_mhc_class)
+templates = list(args.templates)
+template_mhc_class = list(args.template_mhc_class)
 
 # cdr generator
 cdrs_gen = cdr_parser(args.cdrs, random=args.random_cdr, cdr_length=args.cdr_length, patience=100)
@@ -54,27 +54,9 @@ if (len(mhcs)>1) and (len(peptides)>1):
     if not out_dir.exists():
         out_dir.mkdir()
 
-templates = []
-for template in _templates:
-    template = Path(template)
-    if template.stem.endswith("_clean"):
-        print(f"Skipping clean {template}")
-        continue
-    if not template.exists():
-        raise FileNotFoundError(f"Template {template} not found!")
-    elif template.is_dir():
-        templates.extend([p for p in template.glob("*.pdb") if not p.stem.endswith("_clean")])
-    else:
-        templates.append(template)
-if len(templates)>0:
+if not templates is None:
     config.update(templates=templates)
-    if len(_template_mhc_class)>=1:
-        if len(_template_mhc_class)==1:
-            template_mhc_class = _template_mhc_class[0]
-        else:
-            template_mhc_class = _template_mhc_class
-        config.update(template_mhc_class=template_mhc_class)
-print(f'Templates: {config.get("templates", "No templates")}')
+    config.update(template_mhc_class=template_mhc_class)
 
 for mhc, peptide in zip(mhcs, peptides):
     if (len(mhcs)>1) and (len(peptides)>1):

@@ -2,7 +2,7 @@
 "op_dir":"./data/adapt/",
 "key":42,
 "boltz_config":{
-    "docking":true,
+    "docking":false,
     "redocking":false,
     "parameter_path":"./params/boltz",
     "model_name":"boltz2_conf",
@@ -29,5 +29,7 @@
 "out_dir":null,
 "trim":true,
 "chain_cache_len":450,
-"redesign_all_cdrs":false
+"redesign_all_cdrs":false,
+"templates":"/home/hgf_dkfz/hgf_dsb0249/workspaces/haicwork/hgf_dsb0249-BinderDesign/flexcraft/data/adapt/clustering_2026-18-May_16:01:22/representative",
+"template_mhc_class":1
 }

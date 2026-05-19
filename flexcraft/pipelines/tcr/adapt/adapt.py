@@ -202,10 +202,32 @@ class ADAPT:
         )
 
         self.rmsd = RMSD()
-        self.templates = templates
-        self.template_mhc_class = template_mhc_class
-        if not self.templates is None and not self.template_mhc_class is None:
+        
+        # expand template directories and mhc classes
+        if not templates is None and not template_mhc_class is None:
+            if isinstance(template_mhc_class, int):
+                template_mhc_class = [template_mhc_class]
+            if len(template_mhc_class)==1:
+                template_mhc_class = template_mhc_class*len(templates)
+            
+            self.templates = []
+            self.template_mhc_class = []
+            for mhc_class, template in zip(template_mhc_class,templates):
+                template = Path(template)
+                if template.stem.endswith("_clean"):
+                    print(f"Skipping clean {template}")
+                    continue
+                if not template.exists():
+                    raise FileNotFoundError(f"Template {template} not found!")
+                elif template.is_dir():
+                    self.templates.extend([p for p in template.glob("*.pdb") if not p.stem.endswith("_clean")])
+                    self.template_mhc_class.extend([mhc_class for p in template.glob("*.pdb") if not p.stem.endswith("_clean")])
+                else:
+                    self.templates.append(template)
+                    self.template_mhc_class.append(mhc_class)
+
             self.prepare_templates(self.templates, self.template_mhc_class)
+        
         self.save_templates = True
 
     def setup_boltz(self,
@@ -249,6 +271,7 @@ class ADAPT:
             self.boltz_parameter_path = None
             self.boltz_model_name = None
 
+    # functions for manipulating the "scores.csv" file in self.scores
     def get_scores(self):
         with self.lock:
             out = pd.read_csv(self.scores, header=0, index_col=0)
@@ -466,7 +489,7 @@ class ADAPT:
         evaluate:bool=False,
         is_target:np.ndarray|None=None,
         templates:List[DesignData]|None=None,
-        off_target_template:bool=True,
+        off_target_template:bool=False,
         save_structure:bool|Path|str=False,
         ) -> DesignData|Tuple[DesignData, float]:
         '''

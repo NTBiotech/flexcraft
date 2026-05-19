@@ -1,0 +1,2 @@
+#! /usr/bin/bash
+python flexcraft/pipelines/tcr/adapt/design.py --templates /home/hgf_dkfz/hgf_dsb0249/workspaces/haicwork/hgf_dsb0249-BinderDesign/flexcraft/data/adapt/clustering_2026-06-May_10:56:14_mhc1/representative --config adapt_config.json --binder 5BS0 --cdrs data/adapt/input_data/paired_human_cdr3s.tsv --peptide TLMSAMTNL --mhc_allele A*02:01 
