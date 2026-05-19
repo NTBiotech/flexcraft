@@ -39,7 +39,6 @@ from flexcraft.data.data import DesignData
 from flexcraft.files import PDBFile
 from flexcraft.pipelines.tcr.utils import *
 from flexcraft.sequence.aa_codes import AF2_CODE, decode, PMPNN_CODE
-import anarci
 from Bio import Align
 from Bio.Seq import Seq
 from Bio.SeqRecord import SeqRecord
@@ -408,76 +407,6 @@ def rev_ax_op(axes, center, op:tuple):
 
 #---wrapper functions---
 
-def _number_anarci(
-    input_design:DesignData,
-    mhc_class:int|None=None,
-    code:str=AF2_CODE,
-    scheme:str="imgt",
-    ):
-    '''
-    Basic numbering of AB or TCR sequences.
-    Returns:
-        (DesignData, dict): numbered design and dict containing "mhc_chain_index" and "tcr_chain_index" numpy arrays
-    '''
-    params = {"tcr_chain_index":np.array([0,1]),
-    "mhc_chain_index":np.array([2]),}
-    chains = np.unique(input_design["chain_index"])
-
-    for chain in chains:
-        chain_mask = np.array(input_design["chain_index"]) == chain
-        # Pass only this chain's sequence to anarci
-        chain_aa = np.array(input_design["aa"])[chain_mask]
-        seq = decode(chain_aa, code=code)
-        numbering = anarci.number(sequence=seq, scheme=scheme)
-        if numbering[0]:
-            chain_type = numbering[-1]
-            if chain_type in ["A", "L"]:
-                print(f"Setting chain {chain} to {chain_type}!")
-                params["tcr_chain_index"][0] = chain
-            elif chain_type in ["B", "H"]:
-                print(f"Setting chain {chain} to {chain_type}!")
-                params["tcr_chain_index"][1] = chain
-            else:
-                print(f"Unknown chain type {chain_type} of chain {chain}!")
-                continue
-            # Build IMGT position strings (e.g. "1", "111", "111A") then convert to int
-            numbering = [f"{x[0][0]}{x[0][1].strip()}" for x in numbering[0] if x[1] != "-"]
-            numbering = [int(x) if x.isnumeric() else int(x[:-1]) for x in numbering]
-
-            residue_index = np.array(input_design["residue_index"])
-            if len(residue_index[chain_mask])>len(numbering):
-                # extend variable region by constant region
-                numbering += np.arange(numbering[-1]+1,numbering[-1]+1+chain_mask.sum()-len(numbering)).tolist()
-            residue_index[chain_mask] = numbering
-            input_design = input_design.update(residue_index=np.array(residue_index))
-        else:
-            print(f"No numbering found for chain {chain}!")
-    # check if chain indices correct
-    if params["tcr_chain_index"][0]==params["tcr_chain_index"][1]:
-        raise ValueError("TCR chains identical! Currently only 2 chain tcrs supported.")
-    if not mhc_class is None:
-        # fix mhc chain index to longest non-tcr chain
-        chains = np.unique(input_design["chain_index"])
-        # mask out tcr chains
-        tcr_mask = ~(chains[:,None]==params["tcr_chain_index"][None,:]).any(axis=1)
-        chains = chains[tcr_mask]
-        # get chain lengths
-        chain_lengths =  (input_design["chain_index"][:,None] == chains[None,:]).sum(axis=0)
-        # take the n longest chain indices, where n the number of non-tcr chains -1 (for the peptide chain) 
-        # take all non-tcr-chains except for smalles (peptide, hopefully)
-        if mhc_class == 1:
-            params["mhc_chain_index"] = np.array(
-                [chains[r]
-                for r in np.argsort(chain_lengths)[:-(len(chains)-1):-1]],dtype=int
-            )
-        elif mhc_class==2:
-            params["mhc_chain_index"] = np.array(
-                [chains[r]
-                for r in np.argsort(chain_lengths)[:-len(chains):-1]],dtype=int
-            )
-        print(f"Classified chains {params['mhc_chain_index']} as MHC/antigen chains")
-    return input_design, params
-
 def _convert_chains(input_design:DesignData, d:dict|None=None):
     if d is None:
         d = {}
@@ -527,7 +456,7 @@ def parse_structure(
     design = design.copy()
     # convert chain indices
     design,_ = _convert_chains(design)
-    design, params = _number_anarci(design, mhc_class=mhc_class)
+    design, params = number_anarci(design, mhc_class=mhc_class)
 
     # get tcr stub
     tcr_axes, tcr_center = get_axes(
@@ -662,7 +591,8 @@ def translate_pose(
     design = design.copy()
     if not chains is None:
         chains = np.array(chains)
-        chain_mask = (design["chain_index"][:,None]==chains[None,:]).any(axis=1)
+        print("chains: ", chains)
+        chain_mask = (np.array(design["chain_index"])[:,None]==chains[None,:]).any(axis=1)
         subset_design = design[chain_mask]
     else:
         subset_design = design
@@ -726,7 +656,7 @@ def superpose(
     - For origin-centered tcr-poses, use origin_pose as mhc_pose.
     '''
     # tcr
-    tcr_design, params = _number_anarci(tcr_design, mhc_class=None)
+    tcr_design, params = number_anarci(tcr_design, mhc_class=None)
 
     tcr_target_pose=get_axes(
         *[get_tcr_coords(
@@ -790,7 +720,7 @@ def get_mhc_pose(design, mhc_class, params:dict|None=None, blast_kwargs:dict={})
     design = design.copy()
     if params is None:
         design,_ = _convert_chains(design)
-        design, params = _number_anarci(design, mhc_class=mhc_class)
+        design, params = number_anarci(design, mhc_class=mhc_class)
     if mhc_class==1:
         mhc_positions = get_mhc1_positions(
             design=design,
@@ -829,7 +759,7 @@ def get_tcr_pose(design, params:dict|None=None):
     # convert chain indices
     if params is None:
         design,_ = _convert_chains(design)
-        design, params = _number_anarci(design, mhc_class=None)
+        design, params = number_anarci(design, mhc_class=None)
 
     # get tcr stub
     tcr_pose = get_axes(
@@ -845,11 +775,10 @@ def _parse_structure(
     ):
 
     design,_ = _convert_chains(design)
-    design, params = _number_anarci(design, mhc_class=mhc_class)
+    design, params = number_anarci(design, mhc_class=mhc_class)
     tcr_pose = get_tcr_pose(design, params=params)
     # get mhc stub
     mhc_pose = get_mhc_pose(design, mhc_class=mhc_class, params=params)
-
     return design, params, mhc_pose, tcr_pose
 
 origin_pose=(

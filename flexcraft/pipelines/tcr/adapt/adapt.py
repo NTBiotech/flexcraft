@@ -225,7 +225,7 @@ class ADAPT:
                 else:
                     self.templates.append(template)
                     self.template_mhc_class.append(mhc_class)
-
+            self.tcr_poses = None
             self.prepare_templates(self.templates, self.template_mhc_class)
         
         self.save_templates = True
@@ -1431,11 +1431,10 @@ class ADAPT:
         template_mhc_class:int|list,
         ):
         from flexcraft.pipelines.tcr.tcrdock import get_centered_tcr_pose
-        if isinstance(template_mhc_class, int):
-            template_mhc_class = [template_mhc_class, ]*len(templates)
+        print("templates", templates)
         templates = [self._convert_input_peptide(t) for t in templates]
         tcr_poses = [get_centered_tcr_pose(template, mhc_class=mhc_class) for template,mhc_class in zip(templates, template_mhc_class)]
-        self.templates = tcr_poses
+        self.tcr_poses = tcr_poses
         self.template_mhc_class = template_mhc_class
         self.set_templates = False
         return tcr_poses
@@ -1449,9 +1448,10 @@ class ADAPT:
             return True
         
         if not self.templates is None and not self.template_mhc_class is None:
+            print("Setting templates!")
             from flexcraft.pipelines.tcr.tcrdock import set_tcr_pose
+            self.templates = [set_tcr_pose(design, target_pose=template, mhc_class=mhc_class) for template,mhc_class in zip(self.tcr_poses, self.template_mhc_class)]
             self.set_templates = True
-            self.templates = [set_tcr_pose(design, target_pose=template, mhc_class=mhc_class) for template,mhc_class in zip(self.templates, self.template_mhc_class)]
             if self.save_templates:
                 for n,t in enumerate(self.templates):
                     t.save_pdb(self.out_dir/f"template_{n}.pdb")

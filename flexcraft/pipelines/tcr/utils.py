@@ -1,5 +1,6 @@
 from pathlib import Path
 from typing import List, Tuple, Optional, Dict, Iterable, Callable
+import numpy as np
 
 from tree import K
 
@@ -226,3 +227,107 @@ def cdr_parser(cdrs:str|None, random:bool=False, cdr_length:int|tuple|None=None,
             return cdrs
         return _fixed_length_inner
     return _inner
+
+def number_anarci(
+    input_design,
+    mhc_class:int|None=None,
+    code:str|None=None,
+    scheme:str="imgt",
+    trim=False,
+    ):
+    '''
+    Basic numbering of AB or TCR sequences.
+    Returns:
+        (DesignData, dict): numbered design and dict containing "mhc_chain_index" and "tcr_chain_index" numpy arrays
+    '''
+    from flexcraft.sequence.aa_codes import AF2_CODE, decode
+    import anarci
+    import jax.numpy as jnp
+    if code is None:
+        code = AF2_CODE
+    params = {"tcr_chain_index":np.array([None,None]),
+    "mhc_chain_index":np.array([None]),}
+    chains = np.unique(input_design["chain_index"])
+    for chain in chains:
+        chain_mask = np.array(input_design["chain_index"]) == chain
+        # Pass only this chain's sequence to anarci
+        chain_aa = np.array(input_design["aa"])[chain_mask]
+        seq = decode(chain_aa, code=code)
+        numbering = anarci.number(sequence=seq, scheme=scheme)
+        if numbering[0]:
+            chain_type = numbering[-1]
+            if chain_type in ["A", "L"]:
+                print(f"Setting chain {chain} to {chain_type}!")
+                params["tcr_chain_index"][0] = chain
+            elif chain_type in ["B", "H"]:
+                print(f"Setting chain {chain} to {chain_type}!")
+                params["tcr_chain_index"][1] = chain
+            else:
+                print(f"Unknown chain type {chain_type} of chain {chain}!")
+                continue
+            # Build IMGT position strings (e.g. "1", "111", "111A") then convert to int
+            numbering = [f"{x[0][0]}{x[0][1].strip()}" for x in numbering[0] if x[1] != "-"]
+            numbering = [int(x) if x.isnumeric() else int(x[:-1]) for x in numbering]
+
+            residue_index = np.array(input_design["residue_index"])
+            if len(residue_index[chain_mask])>len(numbering):
+                # extend variable region by constant region
+                if trim:
+                    print(f"Trimming chain {chain} to length {len(numbering)}.")
+                    index = np.arange(len(residue_index))[chain_mask]
+                    start = index[0]
+                    stop = index[-1]+1
+                    mask = np.ones(len(residue_index), dtype=np.bool_)
+                    mask[start+len(numbering):stop] = False
+                    input_design = input_design[mask]
+                    chain_mask = np.array(input_design["chain_index"]) == chain
+                    residue_index = np.array(input_design["residue_index"])
+                else:
+                    numbering += np.arange(numbering[-1]+1,numbering[-1]+1+chain_mask.sum()-len(numbering)).tolist()
+            residue_index[chain_mask] = numbering
+            input_design = input_design.update(residue_index=np.array(residue_index))
+
+    # check if chain indices correct
+    if params["tcr_chain_index"][0]==params["tcr_chain_index"][1] and not params["tcr_chain_index"][0] is None:
+        raise ValueError("TCR chains identical! Currently only 2 chain tcrs supported.")
+    if not mhc_class is None:
+        # fix mhc chain index to longest non-tcr chain
+        chains = np.unique(input_design["chain_index"])
+        # mask out tcr chains
+        tcr_mask = ~(chains[:,None]==params["tcr_chain_index"][None,:]).any(axis=1)
+        chains = chains[tcr_mask]
+        # get chain lengths
+        chain_lengths =  (input_design["chain_index"][:,None] == chains[None,:]).sum(axis=0)
+        # take the n longest chain indices, where n the number of non-tcr chains -1 (for the peptide chain) 
+        # take all non-tcr-chains except for smalles (peptide, hopefully)
+        if mhc_class == 1:
+            params["mhc_chain_index"] = np.array(
+                [chains[r]
+                for r in np.argsort(chain_lengths)[:-(len(chains)-1):-1]],dtype=int
+            )
+        elif mhc_class==2:
+            params["mhc_chain_index"] = np.array(
+                [chains[r]
+                for r in np.argsort(chain_lengths)[:-len(chains):-1]],dtype=int
+            )
+        if trim:
+            input_design = trim_mhc(input_design, params["mhc_chain_index"])
+        print(f"Classified chains {params['mhc_chain_index']} as MHC/antigen chains")
+    print("Classified params: ", params)
+    return input_design, params
+
+def trim_mhc(input_design, mhc_chains, target_length=90):
+    print("trim_design mhc_chains",mhc_chains)
+    for chain in mhc_chains:
+        print("trim_design chain",chain)
+        chain_mask = input_design["chain_index"]==chain
+        trim_mask = np.ones(len(input_design["aa"]), dtype=np.bool_)
+        if chain_mask.sum() < 110:
+            print(f"WARNING! Chain {chain} smaller than 110 residues. Removing chain fully!")
+            trim_mask[chain_mask]=False
+        else:
+            trim_mask[chain_mask] = np.concatenate((np.ones(90), np.zeros(int(chain_mask.sum()-90))))
+            input_design = input_design[trim_mask]
+            print(f"Trimming chain {chain} to 90 AAs.")
+        return input_design
+
