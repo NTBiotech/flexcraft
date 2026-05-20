@@ -290,7 +290,7 @@ def number_anarci(
     # check if chain indices correct
     if params["tcr_chain_index"][0]==params["tcr_chain_index"][1] and not params["tcr_chain_index"][0] is None:
         raise ValueError("TCR chains identical! Currently only 2 chain tcrs supported.")
-    if not mhc_class is None:
+    if isinstance(mhc_class, int):
         # fix mhc chain index to longest non-tcr chain
         chains = np.unique(input_design["chain_index"])
         # mask out tcr chains
@@ -314,27 +314,30 @@ def number_anarci(
         if trim:
             target_chains=np.array(
                 [chains[r]
-                for r in np.argsort(chain_lengths)[:-len(chains):-1]],dtype=int
+                for r in np.argsort(chain_lengths)[::-1][:2]],dtype=int
             )
             target_length=90
             if mhc_class == 1:
                 target_length=180
-            input_design = trim_mhc(input_design, params["mhc_chain_index"], target_length=target_length)
+            input_design = trim_mhc(input_design, target_chains, target_length=target_length, mhc_class=mhc_class)
         print(f"Classified chains {params['mhc_chain_index']} as MHC/antigen chains")
     print("Classified params: ", params)
     return input_design, params
 
-def trim_mhc(input_design, mhc_chains, target_length=90):
+def trim_mhc(input_design, mhc_chains, target_length=90, mhc_class=1):
+    #TODO fix trimming of mhc chains!
     print("trim_design mhc_chains",mhc_chains)
     for n, chain in enumerate(mhc_chains):
+        if mhc_class == 1:
+            n = 0
         print("trim_design chain",chain)
         chain_mask = input_design["chain_index"]==chain
         trim_mask = np.ones(len(input_design["aa"]), dtype=np.bool_)
-        if chain_mask.sum() < 110:
-            print(f"WARNING! Chain {chain} smaller than 110 residues. Removing chain fully!")
+        if chain_mask.sum() < 110 or chain_mask.sum() < target_length:
             trim_mask[chain_mask]=False
+            print(f"WARNING! Chain {chain} smaller than 110 residues. Removing chain fully!")
         else:
-            trim_mask[chain_mask] = np.concatenate((np.ones(target_length), np.zeros(int(chain_mask.sum()-target_length))))[::(1-(n*2))]
-            input_design = input_design[trim_mask]
+            trim_mask[chain_mask] = np.concatenate((np.ones(target_length), np.zeros(int(chain_mask.sum()-target_length))))[::(1-(0*2))]
             print(f"Trimming chain {chain} to {target_length} AAs.")
-        return input_design
+        input_design = input_design[trim_mask]
+    return input_design

@@ -55,11 +55,12 @@ def build_database(df:pd.DataFrame, out_dir:Path, ab:bool=False, chain_number:in
         print(chains)
         print(params["tcr_chain_index"])
         tcr_peptide_contact = check_contact(design, params["tcr_chain_index"], chains, 8, )
-        elif not tcr_peptide_contact:
+        if not tcr_peptide_contact:
             print(f"No TCR Peptide contact, dropping {pdb_id}!")
             path.unlink()
             (out_dir/pdb_id).with_suffix(".pdb").unlink()
             drop.append(pdb_id)
+            continue
 
         path.unlink()
         design.save_pdb((out_dir/pdb_id).with_suffix(".pdb"))
@@ -102,15 +103,17 @@ def main():
     out_dir = out_dir/f"clustering_{datetime.now().strftime('%Y-%d-%b_%H:%M:%S')}_{args.mhc_class}"
     out_dir.mkdir(parents=True, exist_ok=True)
     table_path = (args.structure_table).resolve()
-    table = pd.read_csv(table_path)
+    table:pd.DataFrame = pd.read_csv(table_path)
     table = table[table["Bound to TCR"].astype(bool)]
     table = table[table["Species"]=="Human"]
     table = table[table["Resolution"].astype(float)<3]
-    table = table.sort_values("Release date", ascending=False)[:400]
+    table:pd.DataFrame = table.sort_values("Release date", ascending=False)[:400]
 
 
     build_database(df=table, out_dir=out_dir/"pdb_files", ab=False, chain_number=args.chain_number, mhc_class=args.mhc_class)
-    cmd = f"foldseek easy-cluster {out_dir/'pdb_files'} {out_dir/'cluster_result'} $TMP -e 0.001 -c 0.0 --gpu {args.gpu}"
+    cmd = f"foldseek easy-cluster {out_dir/'pdb_files'} {out_dir/'cluster_result'} $TMP \
+        -e 0.01 -c 0.0 --cov-mode 0 --interface-lddt-threshold 0.9 --alignment-type 0 --cluster-reassign 1 -v 2  \
+            --gpu {args.gpu}"
     if args.exec:
         import os
         os.system(cmd)
@@ -127,11 +130,13 @@ def main():
     cluster_dir.mkdir()
     for cluster in np.unique(clusters["rep"]):
         (cluster_dir/cluster).mkdir()
+        print(clusters.query(f"rep=='{cluster}'")["member"])
         for pdb in clusters.query(f"rep=='{cluster}'")["member"]:
             shutil.copy(out_dir/"pdb_files"/f"{pdb.split('_')[0]}.pdb", cluster_dir/cluster)
     # make subdirectory with representative structures for the 4 most populates clusters 
     counts = clusters["rep"].value_counts()[:4]
     reps = counts.index.map(lambda x: x.split("_")[0]).to_list()
+    print(f"Representatives: {counts}")
     rep_dir = out_dir/"representative"
     rep_dir.mkdir()
     for pdb_id in reps:
