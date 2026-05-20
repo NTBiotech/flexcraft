@@ -54,7 +54,7 @@ if (len(mhcs)>1) and (len(peptides)>1):
     if not out_dir.exists():
         out_dir.mkdir()
 
-if not templates is None:
+if templates:
     config.update(templates=templates)
     config.update(template_mhc_class=template_mhc_class)
 

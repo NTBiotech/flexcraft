@@ -25,7 +25,7 @@ from flexcraft.data.data import DesignData
 from flexcraft.files.pdb import PDBFile
 from flexcraft.structure.af import AFInput, AFResult, make_predict, make_af2
 from flexcraft.structure.metrics import RMSD
-from flexcraft.structure.boltz import Joltz2, JoltzResult, JoltzPrediction
+from flexcraft.structure.boltz import Joltz2, JoltzResult, JoltzPrediction, JoltzInput, JoltzSpec
 from flexcraft.utils import Keygen, parse_options, data_from_protein
 import flexcraft.sequence.aa_codes as aas
 from flexcraft.sequence.aa_codes import AF2_CODE, decode
@@ -205,6 +205,8 @@ class ADAPT:
         
         # expand template directories and mhc classes
         if not templates is None and not template_mhc_class is None:
+            if isinstance(templates, (str, Path)):
+                templates = [templates]
             if isinstance(template_mhc_class, int):
                 template_mhc_class = [template_mhc_class]
             if len(template_mhc_class)==1:
@@ -249,6 +251,8 @@ class ADAPT:
 
         self.boltz_docking = config["docking"]
         self.boltz_redocking = config["redocking"]
+        if self.boltz_redocking:
+            raise DeprecationWarning("Boltz redocking is deprecated!")
         if self.boltz_docking or self.boltz_redocking:
             self.boltz_parameter_path = config["parameter_path"]
             self.boltz_model_name = config["model_name"]
@@ -257,16 +261,24 @@ class ADAPT:
             self.boltz_num_sampling_steps = config["num_sampling_steps"]
             self.boltz_deterministic = config["deterministic"]
             self.boltz_msa = config["msa"]
+
             if config["predictor"] is None:
                 self.boltz_model = Joltz2(model=self.boltz_model_name+".ckpt", cache=self.boltz_parameter_path)
-                self.boltz_predictor = self.boltz_model.predictor_adhoc(
+                self._boltz_evaluator, self.boltz_params = self.boltz_model.evaluator(
                     num_recycle=self.boltz_num_recycle,
-                    num_samples=self.boltz_num_samples,
                     num_sampling_steps=self.boltz_num_sampling_steps,
                     deterministic=self.boltz_deterministic
                 )
+                def _wrap_eval(key, params, joltz_input):
+                    return self._boltz_evaluator(params
+                    ).predict(key, joltz_input, num_samples=self.boltz_num_samples,)
+                self.boltz_predictor = jax.jit(_wrap_eval)
             else:
                 self.boltz_predictor = config["predictor"]
+
+            self.boltz_input_dir = self.out_dir/"boltz_inputs"
+            self.boltz_input_dir.mkdir(exist_ok=True)
+
         else:
             self.boltz_parameter_path = None
             self.boltz_model_name = None
@@ -514,12 +526,10 @@ class ADAPT:
                 print("No is_target input. Not adding template!")
             else:
                 af_input = af_input.add_template(design, where=~is_target)
-
         if self.get_templates(design):
             for template in self.templates:
                 template, _ = self.pad_design(template)
                 af_input = af_input.add_template(template, where=~is_target)
-
         if not templates is None:
             for t in templates:
                 t, _ = self.pad_design(t)
@@ -527,6 +537,7 @@ class ADAPT:
 
         af_result = self.af_infer(af_input=af_input)
         design, is_target = self.rm_pad(af_result.to_data(), pad_length, is_target)
+        
         if evaluate:
             score = self.evaluate_step(result=design, input_design=input_design, is_target=is_target)
             if save_structure:
@@ -534,6 +545,7 @@ class ADAPT:
                     save_structure = "evaluated_structure.pdb"
                 design.save_pdb(self.out_dir/save_structure)
             return design, score
+        
         if save_structure:
             if isinstance(save_structure, bool):
                 save_structure = "docked_structure.pdb"
@@ -549,7 +561,9 @@ class ADAPT:
         evaluate:bool=False,
         is_target:np.ndarray|None=None,
         template:DesignData|None=None,
-        )->List[DesignData]|Tuple[List[DesignData]|DesignData, float]|DesignData:
+        input_path:Path|None=None,
+        return_input:bool=False
+        )->List[DesignData]|Tuple[List[DesignData]|DesignData, float]|DesignData|Tuple[List[DesignData]|DesignData, JoltzInput]:
         '''
         Predict protein structure using Boltz-2.
         Returns:
@@ -559,35 +573,34 @@ class ADAPT:
         '''
         chain_index = input_design["chain_index"]
         input_design, pad_length = self.pad_design(input_design=input_design)
-        chain_masks = (input_design["chain_index"][None,:] == jnp.unique(input_design["chain_index"])[:, None])
-        
-        if not template is None:
-            template_dir = tempfile.gettempdir()
-            template_files = []
-            for chain, mask in enumerate(chain_masks):
-                p = f"{template_dir}/template_{chain}.pdb"
-                template,_ = self.pad_design(template)
-                print_dd(template[mask], f"template for chain {chain}")
-                template[mask].save_pdb(p)
-                template_files.append(p)
-            for f in template_files:
-                print(f"{f}: {Path(f).exists()}")
+
+        if input_path is None:
+            joltz_spec = JoltzSpec().add_protein(input_design.to_sequence_string(), use_msa=self.boltz_msa)
+            if self.get_templates(input_design):
+                for template in self.templates:
+                    template, _ = self.pad_design(template)
+                    # TODO: do I need to_chains, where can I specify where as in af
+                    joltz_spec = joltz_spec.add_template(template)
+
+            # TODO: do I need the writer
+            boltz_input, boltz_writer = joltz_spec.to_input(pad=True, cache=self.boltz_parameter_path)
         else:
-            template_files=len(chain_masks) * [None]
+            boltz_input = JoltzInput(features=dict(np.load(input_path, allow_pickle=True)))
+
+            # update input with cdr sequences
+            # TODO do I need to mask the msa anyway?
+            for start, end in self.cdr_coords.values():
+                boltz_input.set_aa(input_design[start:end], start=start)
+
         
-        boltz_prediction = self.boltz_predictor(
-            self.key(), 
-            *[
-                {
-                    "sequence": decode(input_design["aa"][c], AF2_CODE),
-                    "kind":"protein",
-                    "use_msa": template is None if self.boltz_msa is None else self.boltz_msa,
-                    "template_file":template_path
-                }
-                for c, template_path in zip(chain_masks, template_files)
-            ]
+        boltz_result = self.boltz_predictor(
+            self.key(),
+            self.boltz_params,
+            boltz_input
             )
+
         if save_structure:
+            boltz_prediction = JoltzPrediction(data=boltz_result.data, writer=boltz_writer)
             for n in range(self.boltz_num_samples):
                 if isinstance(save_structure, str):
                     save_structure = Path(save_structure)
@@ -598,11 +611,10 @@ class ADAPT:
                         save_structure = Path("boltz_docked_structure.pdb")
                 save_structure = f"{save_structure.with_suffix('')}_{n}.pdb"
                 boltz_prediction.save_pdb(self.out_dir/save_structure, n)
-        
-        boltz_result = boltz_prediction.result
+
         print_dd(boltz_result.to_data(),"boltz_result")
         atom24, mask24 = boltz_result.atom24_samples
-        
+
         if self.boltz_num_samples>1:
             out = [
                 self.rm_pad(
@@ -621,12 +633,16 @@ class ADAPT:
             ]
         else:
             out = [self.rm_pad(boltz_result.to_data(), pad_length).update(chain_index=chain_index),]
+
         if evaluate:
             if len(out)>1:
                 print("WARNING: evaluate_step currently only accepts one sample!")
             score = self.evaluate_step(result=out[0], input_design=input_design, is_target=is_target)
             return out, score
-        
+
+        if return_input:
+            return out, boltz_input
+
         return out
 
 
@@ -742,12 +758,13 @@ class ADAPT:
         print(
             f"\n!---Design Trial for {scaffold_name}---!\n",
         )
-        file_name = f"{scaffold_name}_0.pdb"
+        file_name = f"{scaffold_name}_A_0.pdb"
         n = 0
+        s = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
         while (self.out_dir/file_name).exists():
             n += 1
-            file_name = f"{scaffold_name}_{n}.pdb"
-        #design.save_pdb(f"{(self.out_dir/file_name).with_suffix('')}_input.pdb") checks out
+            file_name = f"{scaffold_name}_{s[n]}_0.pdb"
+            #design.save_pdb(f"{(self.out_dir/file_name).with_suffix('')}_input.pdb") checks out
 
 
         # filter ids
@@ -774,7 +791,9 @@ class ADAPT:
 
         # docking step (structure prediction without evaluation)
         if self.boltz_docking:
-            boltz_designs = self.boltz_docking_step(input_design=design, template=None)
+            boltz_designs, boltz_input = self.boltz_docking_step(input_design=design, template=None, return_input=True)
+            np.savez((self.boltz_input_dir/scaffold_name).with_suffix(".npz"),
+                boltz_input.features)
             design = boltz_designs.pop()
         else:
             design = self.af_docking_step(input_design=design, is_target=target_mask)
@@ -919,7 +938,14 @@ class ADAPT:
 
         # docking step (structure prediction without evaluation)
         if self.boltz_docking:
-            boltz_designs = self.boltz_docking_step(input_design=scaffold, template=None)
+            # check if boltz input exists
+            input_path = (self.boltz_input_dir/scaffold_name).with_suffix(".npz")
+            if input_path.exists():
+                boltz_designs = self.boltz_docking_step(input_design=scaffold, template=None, input_path=input_path)
+            else:
+                boltz_designs, boltz_input = self.boltz_docking_step(input_design=design, template=None, return_input=True)
+                np.savez(input_path,
+                    boltz_input.features)
             scaffold = boltz_designs.pop()
         else:
             scaffold = self.af_docking_step(input_design=scaffold, is_target=target_mask)
