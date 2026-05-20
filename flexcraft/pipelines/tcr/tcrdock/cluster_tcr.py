@@ -111,11 +111,13 @@ def main():
 
 
     build_database(df=table, out_dir=out_dir/"pdb_files", ab=False, chain_number=args.chain_number, mhc_class=args.mhc_class)
-    cmd = f"foldseek easy-cluster {out_dir/'pdb_files'} {out_dir/'cluster_result'} $TMP \
+    
+    cmd = f"foldseek easy-multimercluster {out_dir/'pdb_files'} {out_dir/'cluster_result'} $TMP \
         -e 0.01 -c 0.0 --cov-mode 0 --interface-lddt-threshold 0.9 --alignment-type 0 --cluster-reassign 1 -v 2  \
             --gpu {args.gpu}"
     if args.exec:
         import os
+        print(f"Running {cmd}")
         os.system(cmd)
     else:
         # execute manually
