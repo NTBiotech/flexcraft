@@ -234,6 +234,7 @@ def number_anarci(
     code:str|None=None,
     scheme:str="imgt",
     trim=False,
+    accept_ab=True,
     ):
     '''
     Basic numbering of AB or TCR sequences.
@@ -248,6 +249,11 @@ def number_anarci(
     params = {"tcr_chain_index":np.array([None,None]),
     "mhc_chain_index":np.array([None]),}
     chains = np.unique(input_design["chain_index"])
+
+    chain_types = (["A", "L"],["B", "H"])
+    if not accept_ab:
+        chain_types = (["A"],["B"])
+
     for chain in chains:
         chain_mask = np.array(input_design["chain_index"]) == chain
         # Pass only this chain's sequence to anarci
@@ -256,10 +262,10 @@ def number_anarci(
         numbering = anarci.number(sequence=seq, scheme=scheme)
         if numbering[0]:
             chain_type = numbering[-1]
-            if chain_type in ["A", "L"]:
+            if chain_type in chain_types[0]:
                 print(f"Setting chain {chain} to {chain_type}!")
                 params["tcr_chain_index"][0] = chain
-            elif chain_type in ["B", "H"]:
+            elif chain_type in chain_types[1]:
                 print(f"Setting chain {chain} to {chain_type}!")
                 params["tcr_chain_index"][1] = chain
             else:
@@ -301,16 +307,17 @@ def number_anarci(
         # take the n longest chain indices, where n the number of non-tcr chains -1 (for the peptide chain) 
         # take all non-tcr-chains except for smalles (peptide, hopefully)
         if mhc_class == 1:
-            params["mhc_chain_index"] = np.array(
-                [chains[r]
-                for r in np.argsort(chain_lengths)[:-(len(chains)-1):-1]],dtype=int
-            )
-            sec_mhc = chains[np.argsort(chain_lengths)[::-1][1]]
+            params["mhc_chain_index"] = chains[np.argsort(chain_lengths)[::-1][0]][None,].astype(int)
         elif mhc_class==2:
             params["mhc_chain_index"] = np.array(
                 [chains[r]
                 for r in np.argsort(chain_lengths)[:-len(chains):-1]],dtype=int
             )
+        else:
+            raise ValueError(f"MHC class {mhc_class} not a real thing! Or is it?")
+        assert (np.array([a.ndim for a in params.values()])==1).all(), ValueError(f"Param dimensions should be 1: {np.array([a.ndim for a in params.values()])}")
+        assert len(params["tcr_chain_index"])==2, ValueError(f"len(params[tcr_chain_index]): ", len(params["tcr_chain_index"]))
+        assert len(params["mhc_chain_index"]) >0, ValueError(f"len(params[mhc_chain_index]): ", len(params["mhc_chain_index"]))
         if trim:
             target_chains=np.array(
                 [chains[r]
@@ -320,7 +327,6 @@ def number_anarci(
             if mhc_class == 1:
                 target_length=180
             input_design = trim_mhc(input_design, target_chains, target_length=target_length, mhc_class=mhc_class)
-        print(f"Classified chains {params['mhc_chain_index']} as MHC/antigen chains")
     print("Classified params: ", params)
     return input_design, params
 
