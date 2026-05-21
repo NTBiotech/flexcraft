@@ -40,11 +40,11 @@ def load_data(out_dir:str|Path=Path("./data/adapt/input_data"),
                 zip_ref.extractall(out_dir)
 
 
-def print_dd(dd, name:str="", keys:list=["chain_index"]):
+def print_dd(dd, name:str="", keys:list=["aa"]):
     '''Print configurable attributes of the DesignData object dd'''
     try:
         print(f"\n---{name}---",
-            *[f"{k}:{v}\n\t shape: {v.shape}" for k,v in dd.data.items() if k in keys],
+            *[f"{k}:{dd.to_sequence_string()}\n\t shape: {v.shape}" for k,v in dd.data.items() if k in keys],
             sep="\n"
             )
     except KeyError:

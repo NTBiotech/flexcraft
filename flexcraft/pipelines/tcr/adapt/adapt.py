@@ -10,16 +10,9 @@ Notes:
         python setup.py install
         """
 TODO:
-- profile to see pmpnn vs. af
-- boltz msa or template .pdb
 (- implement current design attribute)
 - design cdrs with salad/boltz
-- add structure templates from canonical tcrs
-    : get mhc 1 and mhc 2 +tcr structures from pdb
-    : align on mhc
-    : cluster by tcr rmsd 
-    : sample from each cluster for representative binding mode set
-
+- implement template realignment after structure prediction
 '''
 from flexcraft.data.data import DesignData
 from flexcraft.files.pdb import PDBFile
@@ -206,6 +199,10 @@ class ADAPT:
 
         self.rmsd = RMSD()
         self.mhc_class = mhc_class
+        self.tcr_poses = None
+        self.blast_kwargs = blast_kwargs
+        self.templates = []
+        self.template_mhc_class = []
         # expand template directories and mhc classes
         if not templates is None and not template_mhc_class is None:
             if isinstance(templates, (str, Path)):
@@ -214,9 +211,7 @@ class ADAPT:
                 template_mhc_class = [template_mhc_class]
             if len(template_mhc_class)==1:
                 template_mhc_class = template_mhc_class*len(templates)
-            
-            self.templates = []
-            self.template_mhc_class = []
+
             for mhc_class, template in zip(template_mhc_class,templates):
                 template = Path(template)
                 if template.stem.endswith("_clean"):
@@ -230,10 +225,8 @@ class ADAPT:
                 else:
                     self.templates.append(template)
                     self.template_mhc_class.append(mhc_class)
-            self.tcr_poses = None
-            self.blast_kwargs = blast_kwargs
             self.prepare_templates(self.templates, self.template_mhc_class)
-            print(f"templates: {self.templates}")
+            #print(f"templates: {self.templates}")
         self.save_templates = True
 
     def setup_boltz(self,
@@ -273,10 +266,10 @@ class ADAPT:
                     num_sampling_steps=self.boltz_num_sampling_steps,
                     deterministic=self.boltz_deterministic
                 )
-                def _wrap_eval(key, params, joltz_input):
+                def _wrap_eval(key, params, joltz_input, num_samples=self.boltz_num_samples):
                     return self._boltz_evaluator(params
-                    ).predict(key, joltz_input, num_samples=self.boltz_num_samples,)
-                self.boltz_predictor = jax.jit(_wrap_eval)
+                    ).predict(key, joltz_input, num_samples=num_samples,)
+                self.boltz_predictor = jax.jit(_wrap_eval, static_argnames="num_samples")
             else:
                 self.boltz_predictor = config["predictor"]
 
@@ -307,28 +300,36 @@ class ADAPT:
         self,
         input_design:DesignData
         ):
-        '''Trim the length of the mhc chains to fit the construct to cache length.'''
+        '''Trim the length of the two longest non-tcr chains (mhc) to fit the construct to cache length.'''
         design_length = len(input_design["aa"])
 
         if design_length<=self.chain_cache_len:
             return input_design
-        trim = ((design_length-self.chain_cache_len)//len(self.mhc_chain_index))+1
         # trim the longest mhc chain
-        chains, counts = np.unique(input_design["chain_index"], return_counts=True)
-        mhc_mask = (chains[:, None]==self.mhc_chain_index[None,:]).any(axis=1)
-        print("trim_design self.mhc_chain_index",self.mhc_chain_index)
-        for chain in self.mhc_chain_index:
+        chains = np.unique(input_design["chain_index"])
+        chains = chains[~(chains[:,None] == self.tcr_chain_index[None,:]).any(axis=1)]
+        counts = (input_design["chain_index"][:,None]==chains[None,:]).sum(axis=0)
+        # chains need to be sorted by ascending length
+        # to eventually fully drop shortest chain first
+        # and adjust trim for consecutive chains
+        chains = chains[np.argsort(counts)[1:]]
+        print("trim_design for chains: ",chains)
+        trim = ((design_length-self.chain_cache_len)//len(chains))+1
+        for n, chain in enumerate(chains):
             print("trim_design chain",chain)
             chain_mask = input_design["chain_index"]==chain
             trim_mask = np.ones(len(input_design["aa"]), dtype=np.bool_)
-            if (chain_mask.sum()-trim) < 50:
+            if (chain_mask.sum()-trim) < 90:
                 print("WARNING! trimmed mhc chain to less than 50 AAs! Removing chain fully!")
                 trim_mask[chain_mask]=False
+                input_design = input_design[trim_mask]
+                # adjust trim for following chains
+                trim = ((len(input_design["aa"])-self.chain_cache_len)//(len(chains)-n-1))+1
             else:
                 chain_end = np.arange(len(chain_mask))[chain_mask][-1]+1
                 # trim from the chain end
                 trim_mask[chain_end-trim:chain_end] = False
-            input_design = input_design[trim_mask]
+                input_design = input_design[trim_mask]
             print(f"Trimming chain {chain} by {trim} from {chain_mask.sum()} to a total of {len(input_design['aa'])} residues.")
         return input_design
 
@@ -532,7 +533,7 @@ class ADAPT:
                 af_input = af_input.add_template(design, where=~is_target)
         if self.get_templates(design):
             for template in self.templates:
-                template, _ = self.pad_design(template)
+                template, _ = self.pad_design(template.copy())
                 af_input = af_input.add_template(template, where=~is_target)
         if not templates is None:
             for t in templates:
@@ -541,7 +542,7 @@ class ADAPT:
 
         af_result = self.af_infer(af_input=af_input)
         design, is_target = self.rm_pad(af_result.to_data(), pad_length, is_target)
-        
+        self.set_templates = False
         if evaluate:
             score = self.evaluate_step(result=design, input_design=input_design, is_target=is_target)
             if save_structure:
@@ -564,48 +565,52 @@ class ADAPT:
         save_structure:bool=False,
         evaluate:bool=False,
         is_target:np.ndarray|None=None,
-        template:DesignData|None=None,
         input_path:Path|None=None,
-        return_input:bool=False
+        return_input:bool=False,
+        templates:bool=True,
+        num_samples:int|None=None
         )->List[DesignData]|Tuple[List[DesignData]|DesignData, float]|DesignData|Tuple[List[DesignData]|DesignData, JoltzInput]:
         '''
         Predict protein structure using Boltz-2.
         Returns:
             structure: List[DesignData], predicted structure and sequence of the input_design for each sample in self.boltz_num_samples
             score: float, output score if evaluate
-            template: DesignData, template with same corresponding chain_index
         '''
         chain_index = input_design["chain_index"]
         input_design, pad_length = self.pad_design(input_design=input_design)
 
-        if input_path is None:
-            joltz_spec = JoltzSpec().add_protein(input_design.to_sequence_string(), use_msa=self.boltz_msa)
+        joltz_spec = JoltzSpec().add_protein(input_design.to_sequence_string(), use_msa=self.boltz_msa)
+        if templates:
             if self.get_templates(input_design):
                 for template in self.templates:
-                    template, _ = self.pad_design(template)
+                    template, _ = self.pad_design(template.copy())
                     # TODO: do I need to_chains, where can I specify where as in af
                     joltz_spec = joltz_spec.add_template(template)
 
-            # TODO: do I need the writer
-            boltz_input, boltz_writer = joltz_spec.to_input(pad=True, cache=self.boltz_parameter_path)
-        else:
-            boltz_input = JoltzInput(features=dict(np.load(input_path, allow_pickle=True)))
+        # TODO: do I need the writer
+        boltz_input, boltz_writer = joltz_spec.to_input(pad=True, cache=self.boltz_parameter_path)
+        if not input_path is None:
+            loaded_input = JoltzInput(features=dict(np.load(input_path, allow_pickle=True)))
 
-            # update input with cdr sequences
-            # TODO do I need to mask the msa anyway?
-            for start, end in self.cdr_coords.values():
-                boltz_input.set_aa(input_design[start:end], start=start)
+            ## update input with cdr sequences
+            #for start, end in self.cdr_coords.values():
+            #    boltz_input.set_aa(input_design[start:end], start=start)
+            boltz_input.inherit_msa(loaded_input)
 
+        if num_samples is None:
+            num_samples = self.boltz_num_samples
         
         boltz_result = self.boltz_predictor(
             self.key(),
             self.boltz_params,
-            boltz_input
+            boltz_input,
+            num_samples=num_samples
             )
+        self.set_templates = False
 
         if save_structure:
             boltz_prediction = JoltzPrediction(data=boltz_result.data, writer=boltz_writer)
-            for n in range(self.boltz_num_samples):
+            for n in range(num_samples):
                 if isinstance(save_structure, str):
                     save_structure = Path(save_structure)
                 if isinstance(save_structure, bool):
@@ -619,7 +624,7 @@ class ADAPT:
         print_dd(boltz_result.to_data(),"boltz_result")
         atom24, mask24 = boltz_result.atom24_samples
 
-        if self.boltz_num_samples>1:
+        if num_samples>1:
             out = [
                 self.rm_pad(
                     DesignData(data=dict(
@@ -633,7 +638,7 @@ class ADAPT:
                     plddt=boltz_result.plddt[n] if len(boltz_result.plddt.shape) == 2 else boltz_result.plddt,)
                     ).untie(),
                     pad_length,).update(chain_index=chain_index)
-                for n in range(self.boltz_num_samples)
+                for n in range(num_samples)
             ]
         else:
             out = [self.rm_pad(boltz_result.to_data(), pad_length).update(chain_index=chain_index),]
@@ -795,7 +800,7 @@ class ADAPT:
 
         # docking step (structure prediction without evaluation)
         if self.boltz_docking:
-            boltz_designs, boltz_input = self.boltz_docking_step(input_design=design, template=None, return_input=True)
+            boltz_designs, boltz_input = self.boltz_docking_step(input_design=design, return_input=True)
             np.savez((self.boltz_input_dir/scaffold_name).with_suffix(".npz"),
                 boltz_input.features)
             design = boltz_designs.pop()
@@ -818,7 +823,6 @@ class ADAPT:
                 design, score = self.boltz_docking_step(
                     input_design=design,
                     evaluate=True,
-                    is_target=target_mask,
                     template=list(templates)[0]
                 )
             else:
@@ -888,7 +892,6 @@ class ADAPT:
         d = {}
         for x,y in zip(np.sort(np.unique(input_design["chain_index"])), range(len(np.unique(input_design["chain_index"])))):
             d[int(x)]=int(y)
-        print(d)
         design = input_design.update(chain_index=jnp.array([d[int(x)] for x in input_design["chain_index"]]))
         self.tcr_chain_index = np.array([d[int(x)] for x in self.tcr_chain_index])
         self.mhc_chain_index = np.array([d[int(x)] for x in self.mhc_chain_index])
@@ -947,9 +950,9 @@ class ADAPT:
             # check if boltz input exists
             input_path = (self.boltz_input_dir/scaffold_name).with_suffix(".npz")
             if input_path.exists():
-                boltz_designs = self.boltz_docking_step(input_design=scaffold, template=None, input_path=input_path)
+                boltz_designs = self.boltz_docking_step(input_design=scaffold, input_path=input_path)
             else:
-                boltz_designs, boltz_input = self.boltz_docking_step(input_design=design, template=None, return_input=True)
+                boltz_designs, boltz_input = self.boltz_docking_step(input_design=design, return_input=True)
                 np.savez(input_path,
                     boltz_input.features)
             scaffold = boltz_designs.pop()
@@ -976,7 +979,6 @@ class ADAPT:
                     input_design=design,
                     evaluate=True,
                     is_target=target_mask,
-                    template=list(templates)[0]
                 )
             else:
                 design, score = self.af_docking_step(
@@ -1037,9 +1039,7 @@ class ADAPT:
                 # remove least performing
                 out_name = scores_sub.sort_values("score", ascending=False).iloc[0].name
 
-            print(scores)
             scores.loc[out_name, "in_pool"] = False
-            print(scores)
             print(f"Removing worst design {out_name} and adding {specs}.")
             if delete_file:
                 if not isinstance(file_name, Path):
@@ -1362,7 +1362,7 @@ class ADAPT:
             # take all non-tcr-chains except for smallest (peptide, hopefully)
             self.mhc_chain_index = np.array(
                 [chains[r]
-                for r in np.argsort(chain_lengths)[:-(len(chains)):-1]]
+                for r in np.argsort(chain_lengths)[1:]]
             )
             print(f"Classified chains {self.mhc_chain_index} as MHC/antigen chains")
         return input_design
@@ -1395,6 +1395,7 @@ class ADAPT:
         cdrs:Dict[str,str]|None=None,
         replace_antigen:bool=False,
         mhc_class:int=1,
+        get_structure:bool=False,
         ):
 
         receptor_name = Path(receptor).stem.split("_")[0][:10] if isinstance(receptor, (str, Path)) else ""
@@ -1456,6 +1457,14 @@ class ADAPT:
         
         if self.trim:
             scaffold =  self.trim_design(scaffold)
+        
+        if get_structure:
+            scaffold = self.boltz_docking_step(
+                scaffold,
+                return_input=False,
+                templates=False,
+                num_samples=1
+            )[0]
         self.set_templates = False
         return scaffold, scaffold_name
     
@@ -1488,10 +1497,11 @@ class ADAPT:
         if self.set_templates:
             return True
         
-        if not self.templates is None and not self.template_mhc_class is None:
+        if not self.tcr_poses is None:
             print("Setting templates!")
             from flexcraft.pipelines.tcr.tcrdock import set_tcr_pose
-            self.templates = [set_tcr_pose(design, target_pose=pose, mhc_class=self.mhc_class, blast_kwargs=self.blast_kwargs) for pose in self.tcr_poses]
+            self.templates = [set_tcr_pose(design.copy(), target_pose=pose, mhc_class=self.mhc_class, blast_kwargs=self.blast_kwargs) for pose in self.tcr_poses]
+            print("template poses: ", self.tcr_poses)
             self.set_templates = True
             if self.save_templates:
                 for n,t in enumerate(self.templates):

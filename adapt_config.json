@@ -28,9 +28,9 @@
 "name":"testing_design",
 "out_dir":null,
 "trim":true,
-"chain_cache_len":450,
+"chain_cache_len":550,
 "redesign_all_cdrs":false,
-"templates":"/home/hgf_dkfz/hgf_dsb0249/workspaces/haicwork/hgf_dsb0249-BinderDesign/flexcraft/data/adapt/clustering_2026-20-May_15:49:51_1/representative",
+"templates":"/home/hgf_dkfz/hgf_dsb0249/workspaces/haicwork/hgf_dsb0249-BinderDesign/flexcraft/data/adapt/clustering_2026-18-May_16:01:22_mhc1/representative",
 "template_mhc_class":1,
 "blast_kwargs":{
     "db_files":{

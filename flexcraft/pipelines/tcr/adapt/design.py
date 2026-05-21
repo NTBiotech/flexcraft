@@ -71,7 +71,31 @@ for mhc, peptide in zip(mhcs, peptides):
     )
 
     print(f"---Designing mhc {mhc} with peptide {peptide}---")
-    mhc_seq = get_mhc(name=mhc)
+    get_structure = False
+    # table with the right columns
+    if mhc.endswith(".csv"):
+        table:pd.DataFrame = pd.read_csv(mhc)
+        if "Bound to TCR" in table.columns:
+            table = table[~table["Bound to TCR"].astype(bool)]
+        if "Species" in table.columns:
+            table = table[table["Species"]=="Human"]
+        if "Resolution" in table.columns:
+            table = table[table["Resolution"].astype(float)<4]
+        mhc = table.sample(1)["PDB ID"]
+    # HLA id
+    if mhc.startswith("HLA"):
+        mhc_seq = get_mhc(accession=mhc)
+        get_structure=True
+    elif mhc[1] == "*":
+        mhc_seq = get_mhc(name=mhc)
+        get_structure=True
+    # PDB ID
+    elif len(mhc) == 4:
+        mhc_seq = clean_chothia(download_structure(mhc, file_format="biological assembly", out_dir=config["op_dir"]+"/input_data"))
+    # pdb file
+    elif mhc.endswith(".pdb"):
+        mhc_seq = clean_chothia(mhc)
+        
 
     for binder in binders:
         print(f"Using Binder {binder}...")
@@ -84,7 +108,7 @@ for mhc, peptide in zip(mhcs, peptides):
             )
         # else assume pdb path
         binder_path = clean_chothia(binder)
-        print("Components: ",binder_path,mhc_seq,peptide,sep="\n")
+        print("Components: ",binder_path,mhc_seq,peptide,sep="\n---\n")
 
         for n in range(args.design_steps):
             print(f"\nDesign step {n}")
@@ -95,6 +119,7 @@ for mhc, peptide in zip(mhcs, peptides):
                 antigen=peptide,
                 cdrs=cdrs,
                 replace_antigen=True,
+                get_structure=get_structure
             )
 
             adapt.design_trial(

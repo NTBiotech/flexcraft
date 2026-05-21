@@ -11,3 +11,4 @@ data/**/*
 params/*
 .gitignore
 logs/**/*
+.vscode/**/*

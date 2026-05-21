@@ -606,7 +606,7 @@ def translate_pose(
     mhc_class=1,
     blast_kwargs:dict={}
     ):
-    
+
     design = design.copy()
     if not chains is None:
         chains = np.array(chains)
@@ -743,6 +743,7 @@ def get_mhc_pose(design, mhc_class, params:dict|None=None, blast_kwargs:dict={})
         design,_ = _convert_chains(design)
         design, params = number_anarci(design, mhc_class=mhc_class)
     if mhc_class==1:
+        print("Getting mhc positions for class 1")
         mhc_positions = get_mhc1_positions(
             design=design,
             params=params,
@@ -754,6 +755,7 @@ def get_mhc_pose(design, mhc_class, params:dict|None=None, blast_kwargs:dict={})
             design=design,
             positions=mhc_positions[6:])
     elif mhc_class==2:
+        print("Getting mhc positions for class 2")
         mhc_positions = get_mhc2_positions(
             design=design,
             params=params,
@@ -767,6 +769,8 @@ def get_mhc_pose(design, mhc_class, params:dict|None=None, blast_kwargs:dict={})
             positions=mhc_positions["B"])
     else:
         raise ValueError(f"Invalid mhc_class {mhc_class}!")
+    print("MHC Positions: ", mhc_positions)
+    print("MHC Coords: ", mhc_coords_0, mhc_coords_1, sep="\n")
     mhc_pose = get_axes(
             mhc_coords_0,
             mhc_coords_1
@@ -807,7 +811,7 @@ origin_pose=(
         np.array([[1,0,0], [0,1,0], [0,0,1]]), np.array([0,0,0])
     )
 
-def set_tcr_pose(design, target_pose, mhc_class, blast_kwargs:dict={}):
+def set_tcr_pose(design, target_pose:tuple|list, mhc_class, blast_kwargs:dict={}):
     '''Apply a tcr pose to a DesignData object.'''
     # TODO: cache the parsing in ADAPT
     design, params, mhc_pose, tcr_pose = _parse_structure(design, mhc_class=mhc_class, blast_kwargs=blast_kwargs)
@@ -819,7 +823,7 @@ def set_tcr_pose(design, target_pose, mhc_class, blast_kwargs:dict={}):
         current_pose=tcr_pose,
         chains=params["tcr_chain_index"],
     )
-    
+
     # align to origin
     design = translate_pose(
         design,
@@ -827,7 +831,13 @@ def set_tcr_pose(design, target_pose, mhc_class, blast_kwargs:dict={}):
         current_pose=mhc_pose,
         chains=None
     )
-
+    if isinstance(target_pose, list):
+        return [translate_pose(
+        design,
+        target_pose=pose,
+        current_pose=origin_pose,
+        chains=params["tcr_chain_index"]
+    ) for pose in target_pose]
     return translate_pose(
         design,
         target_pose=target_pose,
