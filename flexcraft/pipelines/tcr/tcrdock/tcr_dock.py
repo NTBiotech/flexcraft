@@ -9,16 +9,16 @@ For determining reference position coordinates,
 MHC class 1 structures are aligned to a reference sequence using Biopythons pairwise aligner,
 MHC class 2 structures are aligned to a blast database using NCBI's blastp.
 For MHC class 2 structures, blast_kwargs should contain:
-- "blast_exe": a path to the NCBI blast binary directory
+- "blast_exe": a path to the NCBI blast binary directory. Can also be None, if blastp can be called from the shell.
 - a dict containing "A" and "B" with fasta files for the tcr-chains (the blast database is constructed automatically for the first time)
--> NCBI BLAST is available at https://ftp.ncbi.nlm.nih.gov/blast/executables/blast+/latest/
+-> NCBI BLAST is available at https://ftp.ncbi.nlm.nih.gov/blast/executables/blast+/latest/ or by installing it in a conda env through "conda install bioconda::blast"
 Example:
     blast_kwargs = {
-        db_files={
-                "A":Path("../data/tcr_dock/both_class_2_A_chains_v2.fasta"),
-                "B":Path("../data/tcr_dock/both_class_2_B_chains_v2.fasta")
+        "db_files":{
+                "A":"../data/tcr_dock/both_class_2_A_chains_v2.fasta",
+                "B":"../data/tcr_dock/both_class_2_B_chains_v2.fasta"
             },
-        blast_exe=Path("../ncbi-blast-2.17.0+/bin"),}
+        "blast_exe":"../ncbi-blast-2.17.0+/bin"}
 ### Main Functions
 The main functions of this module, intended for application, are:
 - superpose(): This function can be used to construct a tcr-mhc complex from separate DesignData objects using input poses for mhc and tcr.
@@ -120,6 +120,7 @@ def align_seq(x,y):
             pos1 = i-alignment[0][:i].count('-')
             pos2 = i-alignment[1][:i].count('-')
             align[pos1] = pos2
+    print(f"align dict: {align}")
     return align
 
 def get_mhc1_positions(
@@ -138,27 +139,34 @@ def get_mhc1_positions(
     return np.array([index[x] for x in positions])
 
 # make db from fasta
-def db_from_fasta(fasta:Path, blast_exe:Path, dbtype:str="prot"):
+def db_from_fasta(fasta:Path, blast_exe:Path|None=None, dbtype:str="prot"):
+
     assert fasta.exists(), f"{fasta} does not exist!"
-    print(f"{(blast_exe/'makeblastdb').resolve()} -in {fasta.resolve()} -dbtype {dbtype} -parse_seqids")
-    out = os.system(f"{(blast_exe/'makeblastdb').resolve()} -in {fasta.resolve()} -dbtype {dbtype} -parse_seqids")
+    if blast_exe is None:
+        cmd = f"makeblastdb -in {fasta.resolve()} -dbtype {dbtype} -parse_seqids"
+    else:
+        cmd = f"{(blast_exe/'makeblastdb').resolve()} -in {fasta.resolve()} -dbtype {dbtype} -parse_seqids"
+    out = os.system(cmd)
 
     if out != 0:
         raise ExecError(f"Could not create database from fasta {fasta}.")
     return fasta.resolve()
 
 def blastp(
-    blast_exe:Path,
     query:Path,
     db:Path,
     out_file:Path,
+    blast_exe:Path|None=None,
     num_alignments:int=5,
     cols:list=[
         "evalue", "bitscore", "qaccver", "saccver", "pident", "length", "mismatch", "gapopen",
         "qstart", "qend", "qlen", "qseq", "sstart", "send", "slen", "sseq",
         ]
     ):
-    cmd = f"{blast_exe/'blastp'} -query {query.resolve()} -db {db.resolve()} -num_alignments {num_alignments} -outfmt \"10 delim=, {' '.join(cols)}\" >> {out_file.resolve()}"
+    if blast_exe is None:
+        cmd = f"blastp -query {query.resolve()} -db {db.resolve()} -num_alignments {num_alignments} -outfmt \"10 delim=, {' '.join(cols)}\" >> {out_file.resolve()}"
+    else:
+        cmd = f"{blast_exe/'blastp'} -query {query.resolve()} -db {db.resolve()} -num_alignments {num_alignments} -outfmt \"10 delim=, {' '.join(cols)}\" >> {out_file.resolve()}"
     with open(out_file, "w") as wf:
         wf.write(",".join(cols)+"\n")
     os.system(cmd)
@@ -171,15 +179,23 @@ def align_from_blast(hit:pd.Series):
             apos = hit.qstart + ii - hit.qseq[:ii].count('-') - 1 #0-idx
             bpos = hit.sstart + ii - hit.sseq[:ii].count('-') - 1 #
             align[int(bpos)] = int(apos)
+    if min(list(align.keys()))>2:
+        for n in range(min(list(align.keys()))):
+            align[n] = int(n+(hit.qstart-hit.sstart))
     return align
 
 def get_mhc2_positions(
     design:DesignData,
-    db_files:Dict[str,Path],
-    blast_exe:Path,
+    db_files:Dict[str,Path|str],
+    blast_exe:Path|str|None=None,
     params:dict|None=None,
     reverse=False
     ):
+    db_files = {
+        k:Path(v) for k,v in db_files.items()
+    }
+    if isinstance(blast_exe, str):
+        blast_exe = Path(blast_exe)
     try:
         positions = {}
         if params is None:
@@ -206,10 +222,10 @@ def get_mhc2_positions(
                 out_path=tmp_dir/"blast_out.csv"
                 
                 blastp(
-                    blast_exe=blast_exe,
                     query=query_path,
                     db=db_files[c],
-                    out_file=out_path
+                    out_file=out_path,
+                    blast_exe=blast_exe,
                 )
 
                 hits = pd.read_csv(out_path, header=0)
@@ -217,10 +233,12 @@ def get_mhc2_positions(
                     raise AttributeError("No hits found!")
                 hit = hits.iloc[0]
                 print(f"Found hit with evalue {hit['evalue']}")
+                print(hit)
                 if float(hit["evalue"])>0.5 and not reverse:
-                    raise AttributeError(f"E-Value too low: {hit['evalue']}")
+                    raise AttributeError(f"E-Value too high: {hit['evalue']}")
 
             align = align_from_blast(hit)
+            print("Aligner: ",align)
             _positions = [align[x] for x in class2_alfas_positions_0indexed[c]]
             index = np.arange(len(design["aa"]))[mask]
             positions.update({c:np.array([index[x] for x in _positions])})
@@ -583,9 +601,10 @@ def _apply_atom_op(atom_positions:np.ndarray, op:tuple, atom_mask=np._NoValue):
 def translate_pose(
     design:DesignData,
     target_pose,
-    current_pose=None,
+    current_pose,
     chains:np.ndarray|Iterable|None=None,
     mhc_class=1,
+    blast_kwargs:dict={}
     ):
     
     design = design.copy()
@@ -600,8 +619,10 @@ def translate_pose(
     atom_mask = np.repeat(subset_design["atom_mask"][...,None],3, axis=-1).astype(bool)  # pyright: ignore
     # get the operation
     if current_pose is None:
+        raise DeprecationWarning("Pose inference in translate pose deprecated!")
+        # TODO: parse_structure of _parse_structure?
         # if no axes, center given, attempt to infer
-        current_pose = parse_structure(design, mhc_class=mhc_class)
+        current_pose = parse_structure(design, mhc_class=mhc_class, blast_kwargs=blast_kwargs)
     # center
     atom_positions = center_atom_op(atom_positions, *current_pose)
     atom_positions = _apply_atom_op(atom_positions, target_pose, atom_mask=atom_mask)
@@ -772,23 +793,24 @@ def get_tcr_pose(design, params:dict|None=None):
 def _parse_structure(
     design,
     mhc_class,
+    blast_kwargs:dict={},
     ):
 
     design,_ = _convert_chains(design)
     design, params = number_anarci(design, mhc_class=mhc_class)
     tcr_pose = get_tcr_pose(design, params=params)
     # get mhc stub
-    mhc_pose = get_mhc_pose(design, mhc_class=mhc_class, params=params)
+    mhc_pose = get_mhc_pose(design, mhc_class=mhc_class, params=params, blast_kwargs=blast_kwargs)
     return design, params, mhc_pose, tcr_pose
 
 origin_pose=(
         np.array([[1,0,0], [0,1,0], [0,0,1]]), np.array([0,0,0])
     )
 
-def set_tcr_pose(design, target_pose, mhc_class):
+def set_tcr_pose(design, target_pose, mhc_class, blast_kwargs:dict={}):
     '''Apply a tcr pose to a DesignData object.'''
-
-    design, params, mhc_pose, tcr_pose = _parse_structure(design, mhc_class=mhc_class)
+    # TODO: cache the parsing in ADAPT
+    design, params, mhc_pose, tcr_pose = _parse_structure(design, mhc_class=mhc_class, blast_kwargs=blast_kwargs)
 
     # align tcr to mhc_pose
     design = translate_pose(
@@ -813,10 +835,10 @@ def set_tcr_pose(design, target_pose, mhc_class):
         chains=params["tcr_chain_index"]
     )
 
-def get_centered_tcr_pose(design, mhc_class):
+def get_centered_tcr_pose(design, mhc_class, blast_kwargs:dict={}):
     '''Get the tcr pose, with mhc aligned to the origin.'''
     
-    mhc_pose = get_mhc_pose(design, mhc_class=mhc_class)
+    mhc_pose = get_mhc_pose(design, mhc_class=mhc_class, blast_kwargs=blast_kwargs)
 
     design = center_design(design, mhc_pose)
     

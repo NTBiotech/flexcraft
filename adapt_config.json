@@ -1,5 +1,5 @@
 {
-"op_dir":"./data/adapt/",
+"op_dir":"/home/hgf_dkfz/hgf_dsb0249/workspaces/haicwork/hgf_dsb0249-BinderDesign/flexcraft/data/adapt",
 "key":42,
 "boltz_config":{
     "docking":true,
@@ -30,6 +30,13 @@
 "trim":true,
 "chain_cache_len":450,
 "redesign_all_cdrs":false,
-"templates":"/home/hgf_dkfz/hgf_dsb0249/workspaces/haicwork/hgf_dsb0249-BinderDesign/flexcraft/data/adapt/clustering_2026-20-May_11:06:47_1",
-"template_mhc_class":1
+"templates":"/home/hgf_dkfz/hgf_dsb0249/workspaces/haicwork/hgf_dsb0249-BinderDesign/flexcraft/data/adapt/clustering_2026-20-May_15:49:51_1/representative",
+"template_mhc_class":1,
+"blast_kwargs":{
+    "db_files":{
+        "A":"/home/hgf_dkfz/hgf_dsb0249/workspaces/haicwork/hgf_dsb0249-BinderDesign/flexcraft/data/adapt/input_data/bradleyetal/both_class_2_A_chains_v2.fasta",
+        "B":"/home/hgf_dkfz/hgf_dsb0249/workspaces/haicwork/hgf_dsb0249-BinderDesign/flexcraft/data/adapt/input_data/bradleyetal/both_class_2_B_chains_v2.fasta"
+    },
+    "blast_exe":null},
+"mhc_class":1
 }

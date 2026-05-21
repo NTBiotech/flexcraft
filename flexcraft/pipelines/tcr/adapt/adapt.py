@@ -80,6 +80,8 @@ class ADAPT:
         redesign_all_cdrs=False,
         templates:list|None=None,
         template_mhc_class:list|int|None=None,
+        blast_kwargs:dict|None=None,
+        mhc_class:int = 1,
     ):
         '''
         Initialize ADAPT class for TCR design and refinement.
@@ -118,7 +120,7 @@ class ADAPT:
         '''
         # directory organization
         if not isinstance(op_dir, Path):
-            op_dir = Path(op_dir)
+            op_dir = Path(op_dir).resolve()
         self.op_dir = op_dir
         self.in_dir = self.op_dir/"input_data"
         self.name=name
@@ -127,7 +129,7 @@ class ADAPT:
             raise FileNotFoundError(f"Input dir {self.in_dir} does not exist!")
         
         if out_dir:
-            self.out_dir = Path(out_dir)
+            self.out_dir = Path(out_dir).resolve()
         else:
             self.out_dir = self.op_dir/(datetime.now().strftime("%Y-%d-%b_%H:%M:%S")+f"_{name}_0")
             n=0
@@ -155,6 +157,7 @@ class ADAPT:
             "in_pool",
             "tcr_chain_index",
             "mhc_chain_index",
+            "mhc_class",
             *[
             k for k in self.imgt_mapper.keys()
             ],
@@ -202,7 +205,7 @@ class ADAPT:
         )
 
         self.rmsd = RMSD()
-        
+        self.mhc_class = mhc_class
         # expand template directories and mhc classes
         if not templates is None and not template_mhc_class is None:
             if isinstance(templates, (str, Path)):
@@ -228,8 +231,9 @@ class ADAPT:
                     self.templates.append(template)
                     self.template_mhc_class.append(mhc_class)
             self.tcr_poses = None
+            self.blast_kwargs = blast_kwargs
             self.prepare_templates(self.templates, self.template_mhc_class)
-        
+            print(f"templates: {self.templates}")
         self.save_templates = True
 
     def setup_boltz(self,
@@ -835,6 +839,7 @@ class ADAPT:
         # Use a named Series so missing CDR1/CDR2 columns get NaN automatically
         row = {"score": score, "scaffold": scaffold_name, "time":datetime.now().strftime("%Y-%d-%b_%H:%M:%S"),
             "tcr_chain_index":(*[int(i) for i in self.tcr_chain_index],),"mhc_chain_index":(*[int(i) for i in self.mhc_chain_index],),
+            "mhc_class":int(self.mhc_class),
             **{cdr:self.get_cdr_seq(design, cdr) for cdr in self.imgt_mapper.keys()},
             **{f"{k}_coords":v for k, v in self.cdr_coords.items()},}
         print(row)
@@ -871,6 +876,7 @@ class ADAPT:
         self.cdr_coords = {k:to_tuple(row[f"{k}_coords"]) if row[f"{k}_coords"] else self.imgt_mapper[k] for k in self.imgt_mapper.keys()}
         self.tcr_chain_index = np.array(to_tuple(row["tcr_chain_index"]))
         self.mhc_chain_index = np.array(to_tuple(row["mhc_chain_index"]))
+        self.mhc_class = row["mhc_class"]
         # loading the file collapses the chain indices
         design = PDBFile(path=self.out_dir/row.name).to_data()
         design = self.convert_chains(design)
@@ -989,6 +995,7 @@ class ADAPT:
         # Use a named Series so missing CDR1/CDR2 columns get NaN automatically
         row = {"score": score, "scaffold": scaffold_name, "time":datetime.now().strftime("%Y-%d-%b_%H:%M:%S"),
             "tcr_chain_index":(*[int(i) for i in self.tcr_chain_index],),"mhc_chain_index":(*[int(i) for i in self.mhc_chain_index],),
+            "mhc_class":int(self.mhc_class),
             **{cdr:self.get_cdr_seq(scaffold, cdr) for cdr in self.imgt_mapper.keys()},
             **{f"{k}_coords":v for k, v in self.cdr_coords.items()},}
 
@@ -1352,7 +1359,7 @@ class ADAPT:
             # get chain lengths
             chain_lengths =  (input_design["chain_index"][:,None] == chains[None,:]).sum(axis=0)
             # take the n longest chain indices, where n the number of non-tcr chains -1 (for the peptide chain) 
-            # take all non-tcr-chains except for smalles (peptide, hopefully)
+            # take all non-tcr-chains except for smallest (peptide, hopefully)
             self.mhc_chain_index = np.array(
                 [chains[r]
                 for r in np.argsort(chain_lengths)[:-(len(chains)):-1]]
@@ -1387,6 +1394,7 @@ class ADAPT:
         presenter:DesignData|Path|str|None=None,
         cdrs:Dict[str,str]|None=None,
         replace_antigen:bool=False,
+        mhc_class:int=1,
         ):
 
         receptor_name = Path(receptor).stem.split("_")[0][:10] if isinstance(receptor, (str, Path)) else ""
@@ -1414,7 +1422,7 @@ class ADAPT:
                 presenter = presenter[(
                     presenter["chain_index"][:, None]==self.mhc_chain_index[None,:]
                 ).any(axis=1)]
-
+        self.mhc_class = mhc_class
         scaffold = DesignData.concatenate(
             [d for d in [receptor, antigen, presenter] if not d is None],
             sep_chains=True, sep_batch=False
@@ -1459,8 +1467,15 @@ class ADAPT:
         from flexcraft.pipelines.tcr.tcrdock import get_centered_tcr_pose
         print("templates", templates)
         templates = [self._convert_input_peptide(t) for t in templates]
-        tcr_poses = [get_centered_tcr_pose(template, mhc_class=mhc_class) for template,mhc_class in zip(templates, template_mhc_class)]
+        tcr_poses = []
+        for template,mhc_class in zip(templates, template_mhc_class):
+            # try to parse template structures using tcrdock
+            try:
+                tcr_poses.append(get_centered_tcr_pose(template, mhc_class=mhc_class, blast_kwargs=self.blast_kwargs))
+            except AttributeError as e:
+                print(e, f" -> Skipping template!")
         self.tcr_poses = tcr_poses
+        self.templates = templates
         self.template_mhc_class = template_mhc_class
         self.set_templates = False
         return tcr_poses
@@ -1476,10 +1491,12 @@ class ADAPT:
         if not self.templates is None and not self.template_mhc_class is None:
             print("Setting templates!")
             from flexcraft.pipelines.tcr.tcrdock import set_tcr_pose
-            self.templates = [set_tcr_pose(design, target_pose=template, mhc_class=mhc_class) for template,mhc_class in zip(self.tcr_poses, self.template_mhc_class)]
+            self.templates = [set_tcr_pose(design, target_pose=pose, mhc_class=self.mhc_class, blast_kwargs=self.blast_kwargs) for pose in self.tcr_poses]
             self.set_templates = True
             if self.save_templates:
                 for n,t in enumerate(self.templates):
+                    print(self.out_dir/f"template_{n}.pdb")
+                    print_dd(t, f"template {n}")
                     t.save_pdb(self.out_dir/f"template_{n}.pdb")
             return True
         return False

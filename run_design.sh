@@ -1,2 +1,2 @@
 #! /usr/bin/bash
-python flexcraft/pipelines/tcr/adapt/design.py --config adapt_config.json --binder 5BS0 --cdrs data/adapt/input_data/paired_human_cdr3s.tsv --peptide TLMSAMTNL --mhc_allele A*02:01 
+python flexcraft/pipelines/tcr/adapt/design.py --config adapt_config.json --binder 5BS0 --cdrs data/adapt/input_data/paired_human_cdr3s.tsv --peptide TLMSAMTNL --mhc_allele A*02:01 --mhc_class 1

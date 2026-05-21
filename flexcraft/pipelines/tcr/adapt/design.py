@@ -23,11 +23,12 @@ parser.add_argument("--design_steps", type=int, default=1,
     help="Number of design attempts for each binder.")
 parser.add_argument("--cdr_length", type=int, default=None,
     help="Pin the cdr length to a specific int")
-parser.add_argument("--templates", nargs="*", default=[],
+parser.add_argument("--templates", nargs="*", default=None,
     help="Template TCR-MHC-complexes in pdb files. Directory as input supported.\
         Also set --template_mhc_class when using this feature. Overwrites config templates!")
-parser.add_argument("--template_mhc_class", nargs="*", default=[1],
+parser.add_argument("--template_mhc_class", nargs="*", default=None,
     help="Add MHC class of templates. If one element, is broadcasted to all templates.")
+parser.add_argument("--mhc_class", type=int, default=None)
 
 
 parser.add_argument("--config", default="./config.json",)
@@ -40,8 +41,11 @@ mhcs = list(args.mhc_allele)
 peptides = list(args.peptide)
 binders = list(args.binder)
 out_dir = args.out_dir
-templates = list(args.templates)
-template_mhc_class = list(args.template_mhc_class)
+templates = args.templates
+template_mhc_class = args.template_mhc_class
+
+if not args.mhc_class is None:
+    config.update(mhc_class = args.mhc_class)
 
 # cdr generator
 cdrs_gen = cdr_parser(args.cdrs, random=args.random_cdr, cdr_length=args.cdr_length, patience=100)
@@ -54,9 +58,9 @@ if (len(mhcs)>1) and (len(peptides)>1):
     if not out_dir.exists():
         out_dir.mkdir()
 
-if templates:
-    config.update(templates=templates)
-    config.update(template_mhc_class=template_mhc_class)
+if not templates is None:
+    config.update(templates=list(templates))
+    config.update(template_mhc_class=list(template_mhc_class))
 
 for mhc, peptide in zip(mhcs, peptides):
     if (len(mhcs)>1) and (len(peptides)>1):
@@ -76,7 +80,7 @@ for mhc, peptide in zip(mhcs, peptides):
             binder = download_structure(
                 binder,
                 file_format="antibody" if args.ab else "biological assembly",
-                out_dir=config["op_dir"]+"input_data"
+                out_dir=config["op_dir"]+"/input_data"
             )
         # else assume pdb path
         binder_path = clean_chothia(binder)
