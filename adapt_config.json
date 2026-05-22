@@ -10,7 +10,7 @@
     "num_samples":5,
     "num_sampling_steps":25,
     "deterministic":false,
-    "msa":null
+    "msa":false
 },
 "af2_config":{
     "model":null,
@@ -30,7 +30,7 @@
 "trim":true,
 "chain_cache_len":550,
 "redesign_all_cdrs":false,
-"templates":"/home/hgf_dkfz/hgf_dsb0249/workspaces/haicwork/hgf_dsb0249-BinderDesign/flexcraft/data/adapt/clustering_2026-18-May_16:01:22_mhc1/representative",
+"templates":"/home/hgf_dkfz/hgf_dsb0249/workspaces/haicwork/hgf_dsb0249-BinderDesign/flexcraft/data/adapt/clustering_2026-18-May_16:01:22_mhc1/representative/1LP9.pdb",
 "template_mhc_class":1,
 "blast_kwargs":{
     "db_files":{

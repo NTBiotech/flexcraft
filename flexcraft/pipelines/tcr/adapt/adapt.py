@@ -25,7 +25,7 @@ from flexcraft.sequence.aa_codes import AF2_CODE, decode
 from flexcraft.sequence.mpnn import make_pmpnn
 from flexcraft.sequence.sample import *
 
-from flexcraft.pipelines.tcr.utils import print_dd, clean_chothia
+from flexcraft.pipelines.tcr.utils import print_dd, clean_chothia, pdb_to_pdb, pdb_to_cif
 from filelock import FileLock
 
 from colabdesign.af.alphafold.model import utils as af_utils
@@ -40,7 +40,7 @@ from typing import List, Tuple, Optional, Dict, Iterable, Callable
 from datetime import datetime
 import tempfile
 
-
+from gemmi import cif
 
 from jax import jit
 import jax.numpy as jnp
@@ -532,7 +532,7 @@ class ADAPT:
             else:
                 af_input = af_input.add_template(design, where=~is_target)
         if self.get_templates(design):
-            for template in self.templates:
+            for template in self.template_structures:
                 template, _ = self.pad_design(template.copy())
                 af_input = af_input.add_template(template, where=~is_target)
         if not templates is None:
@@ -582,9 +582,7 @@ class ADAPT:
         joltz_spec = JoltzSpec().add_protein(input_design.to_sequence_string(), use_msa=self.boltz_msa)
         if templates:
             if self.get_templates(input_design):
-                for template in self.templates:
-                    template, _ = self.pad_design(template.copy())
-                    # TODO: do I need to_chains, where can I specify where as in af
+                for template in self.template_paths:
                     joltz_spec = joltz_spec.add_template(template)
 
         # TODO: do I need the writer
@@ -1500,13 +1498,16 @@ class ADAPT:
         if not self.tcr_poses is None:
             print("Setting templates!")
             from flexcraft.pipelines.tcr.tcrdock import set_tcr_pose
-            self.templates = [set_tcr_pose(design.copy(), target_pose=pose, mhc_class=self.mhc_class, blast_kwargs=self.blast_kwargs) for pose in self.tcr_poses]
+            self.template_structures = [set_tcr_pose(design.copy(), target_pose=pose, mhc_class=self.mhc_class, blast_kwargs=self.blast_kwargs) for pose in self.tcr_poses]
             print("template poses: ", self.tcr_poses)
             self.set_templates = True
+            self.template_paths = []
             if self.save_templates:
-                for n,t in enumerate(self.templates):
+                for n,t in enumerate(self.template_structures):
                     print(self.out_dir/f"template_{n}.pdb")
                     print_dd(t, f"template {n}")
-                    t.save_pdb(self.out_dir/f"template_{n}.pdb")
+                    t,_ = self.pad_design(t)
+                    t.save_pdb(self.boltz_input_dir/f"template_{n}.pdb")
+                    self.template_paths.append(pdb_to_pdb(str(self.boltz_input_dir/f"template_{n}.pdb")))
             return True
         return False

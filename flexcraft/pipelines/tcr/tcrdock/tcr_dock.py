@@ -605,7 +605,7 @@ def translate_pose(
     chains:np.ndarray|Iterable|None=None,
     mhc_class=1,
     blast_kwargs:dict={}
-    ):
+    )-> DesignData:
 
     design = design.copy()
     if not chains is None:

@@ -347,3 +347,33 @@ def trim_mhc(input_design, mhc_chains, target_length=90, mhc_class=1):
             print(f"Trimming chain {chain} to {target_length} AAs.")
         input_design = input_design[trim_mask]
     return input_design
+
+def pdb_to_pdb(in_path:str, out_path=None, tmp_dir=None):
+    '''Converts template pdb files for boltz.'''
+    if out_path is None:
+        out_path = in_path
+    tmp = None
+    if tmp_dir is None:
+        from tempfile import TemporaryDirectory
+        tmp = TemporaryDirectory(prefix="pdb_to_pdb")
+        tmp_dir = Path(tmp.name)
+    from gemmi import read_pdb, read_structure
+    structure = read_pdb(str(in_path))
+    doc = structure.make_mmcif_document()
+    doc.write_file(str(tmp_dir/"pdb_to_pdb.cif"))
+    structure = read_structure(str(tmp_dir/"pdb_to_pdb.cif"))
+    structure.write_pdb(str(out_path))
+
+    if not tmp is None:
+        tmp.cleanup()
+    return str(out_path)
+
+def pdb_to_cif(in_path:str, out_path=None):
+    '''Converts pdb to cif.'''
+    if out_path is None:
+        out_path = in_path.split(".")[0]+".cif"
+    from gemmi import read_pdb, read_structure
+    structure = read_pdb(in_path)
+    doc = structure.make_mmcif_block()
+    doc.write_file(out_path)
+    return out_path
