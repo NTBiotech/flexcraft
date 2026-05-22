@@ -19,9 +19,14 @@ def count_chains(pdb_path:Path,)->int:
 
 def build_database(df:pd.DataFrame, out_dir:Path, ab:bool=False, chain_number:int|None=None, mhc_class:int=1):
     out_dir.mkdir(exist_ok=True)
+    pdb_dir = out_dir/"pdb_files"
+    pdb_dir.mkdir(exist_ok=True)
+    foldseek_dir = out_dir/"foldseek"
+    foldseek_dir.mkdir(exist_ok=True)
+
     drop=[]
     for pdb_id in df["PDB ID"].to_list():
-        path = download_structure(pdb_id=pdb_id, file_format="antibody" if ab else "biological assembly", out_dir=out_dir)
+        path = download_structure(pdb_id=pdb_id, file_format="antibody" if ab else "biological assembly", out_dir=pdb_dir)
         if not path is None:
             if (path.parent/(path.name+".gz")).exists():
                 (path.parent/(path.name+".gz")).unlink()
@@ -43,7 +48,7 @@ def build_database(df:pd.DataFrame, out_dir:Path, ab:bool=False, chain_number:in
         if None in params["tcr_chain_index"]:#
             print(f"Not all tcr chains found, dropping {pdb_id}!")
             path.unlink()
-            (out_dir/pdb_id).with_suffix(".pdb").unlink()
+            (pdb_dir/pdb_id).with_suffix(".pdb").unlink()
             drop.append(pdb_id)
             continue
         chains = np.unique(design["chain_index"])
@@ -57,12 +62,16 @@ def build_database(df:pd.DataFrame, out_dir:Path, ab:bool=False, chain_number:in
         if not tcr_peptide_contact:
             print(f"No TCR Peptide contact, dropping {pdb_id}!")
             path.unlink()
-            (out_dir/pdb_id).with_suffix(".pdb").unlink()
+            (pdb_dir/pdb_id).with_suffix(".pdb").unlink()
             drop.append(pdb_id)
             continue
 
         path.unlink()
-        design.save_pdb((out_dir/pdb_id).with_suffix(".pdb"))
+        design.save_pdb((pdb_dir/pdb_id).with_suffix(".pdb"))
+        # remove peptide for clustering by only mhc and tcr
+        design = design[~(design["chain_index"][:,None]==chains[None,:]).any(axis=1)]
+        design.save_pdb((foldseek_dir/pdb_id).with_suffix(".pdb"))
+
 
     df=df[(df["PDB ID"].to_numpy()[:, None]==np.array(drop)[None,:]).any(axis=1)]
     df.to_csv(out_dir/"annotation.csv")
@@ -108,11 +117,10 @@ def main():
     table = table[table["Resolution"].astype(float)<4]
     table:pd.DataFrame = table.sort_values("Release date", ascending=False)[:400]
 
-
-    build_database(df=table, out_dir=out_dir/"pdb_files", ab=False, chain_number=args.chain_number, mhc_class=args.mhc_class)
+    build_database(df=table, out_dir=out_dir, ab=False, chain_number=args.chain_number, mhc_class=args.mhc_class)
     
-    cmd = f"foldseek easy-multimercluster {out_dir/'pdb_files'} {out_dir/'cluster_result'} $TMP \
-        -e 0.01 -c 0.0 --cov-mode 0 --interface-lddt-threshold 0.7 --alignment-type 0 -v 2  \
+    cmd = f"foldseek easy-multimercluster {out_dir/'foldseek'} {out_dir/'cluster_result'} $TMP \
+        -e 0.01 -c 0.0 --cov-mode 0 --interface-lddt-threshold 0.6 --alignment-type 0 -v 2  \
             --gpu {args.gpu}"
     if args.exec:
         import os
@@ -146,5 +154,6 @@ def main():
 
     print(f"Saved representative structures in {rep_dir}")
     return rep_dir
+
 if __name__ =="__main__":
     main()
