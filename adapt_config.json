@@ -30,12 +30,12 @@
 "trim":true,
 "chain_cache_len":550,
 "redesign_all_cdrs":false,
-"templates":"/home/hgf_dkfz/hgf_dsb0249/workspaces/haicwork/hgf_dsb0249-BinderDesign/flexcraft/data/adapt/clustering_2026-18-May_16:01:22_mhc1/representative/1LP9.pdb",
+"templates":"./data/adapt/clustering_mhc1/representative/",
 "template_mhc_class":1,
 "blast_kwargs":{
     "db_files":{
-        "A":"/home/hgf_dkfz/hgf_dsb0249/workspaces/haicwork/hgf_dsb0249-BinderDesign/flexcraft/data/adapt/input_data/bradleyetal/both_class_2_A_chains_v2.fasta",
-        "B":"/home/hgf_dkfz/hgf_dsb0249/workspaces/haicwork/hgf_dsb0249-BinderDesign/flexcraft/data/adapt/input_data/bradleyetal/both_class_2_B_chains_v2.fasta"
+        "A":"./data/adapt/input_data/bradleyetal/both_class_2_A_chains_v2.fasta",
+        "B":"./data/adapt/input_data/bradleyetal/both_class_2_B_chains_v2.fasta"
     },
     "blast_exe":null},
 "mhc_class":1
