@@ -101,6 +101,7 @@ def main():
     parser.add_argument("--gpu", type=int, default=0)
     parser.add_argument("--chain_number", type=int, default=5)
     parser.add_argument("--mhc_class", type=int, default=1)
+    parser.add_argument("--iplddt", type=float, default=0.8)
 
 
     args = parser.parse_args()
@@ -120,7 +121,7 @@ def main():
     build_database(df=table, out_dir=out_dir, ab=False, chain_number=args.chain_number, mhc_class=args.mhc_class)
     
     cmd = f"foldseek easy-multimercluster {out_dir/'foldseek'} {out_dir/'cluster_result'} $TMP \
-        -e 0.01 -c 0.0 --cov-mode 0 --interface-lddt-threshold 0.6 --alignment-type 0 -v 2  \
+        -e 0.01 -c 0.0 --cov-mode 0 --interface-lddt-threshold {args.iplddt} --alignment-type 0 -v 2  \
             --gpu {args.gpu}"
     if args.exec:
         import os
