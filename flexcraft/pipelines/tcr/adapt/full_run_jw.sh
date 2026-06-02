@@ -1,4 +1,4 @@
-#! /usr/bin/bash
+#!/bin/bash -x
 # Script for executing a full ADAPT experiment.
 #
 # example RUN_CONFIG:
@@ -73,8 +73,9 @@ RUN_CONFIG="./run_config_jw.sh"
 source $RUN_CONFIG
 
 mkdir $OUT_DIR
-
-python flexcraft/pipelines/tcr/tcrdock/cluster_tcr.py --exec --out_dir data/adapt/clustering_mhc1 --structure_table data/adapt/input_data/tcr3d_data/mhc1.csv --mhc_class 1 --iplddt 0.8 --gpu 1
+#OUT_DIR="/p/home/jusers/toulouse1/juwels/project/toulouse1/flexcraft/data/adapt/full_run_2026-06-02_13:24:50"
+pwd
+#python flexcraft/pipelines/tcr/tcrdock/cluster_tcr.py --exec --out_dir data/adapt/clustering_mhc1 --structure_table data/adapt/input_data/tcr3d_data/mhc1.csv --mhc_class 1 --iplddt 0.8 --gpu 1
 
 
 # launch designers for all binders
