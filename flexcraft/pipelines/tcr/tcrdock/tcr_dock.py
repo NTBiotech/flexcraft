@@ -279,7 +279,7 @@ def gram_schmidt(arr:np.ndarray):
 def get_axes(a,b)->Tuple[np.ndarray, np.ndarray]:
     '''Calculates normalized axes from two sets of points.'''
     
-    center = centroid(np.concat([a,b]))
+    center = centroid(np.concatenate([a,b]))
     rotation, rssd = Rotation.align_vectors(a - center, b - center)
     # TODO: inner product with cdr or peptide
     # if negative invert

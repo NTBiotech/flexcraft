@@ -157,6 +157,7 @@ class ADAPT:
             *[
             f"{k}_coords" for k in self.imgt_mapper.keys()
             ],
+            "out_time"
             ]
         self.columns_default = {"in_pool":True}
         self.scores = self.out_dir/"scores.csv"
@@ -208,7 +209,7 @@ class ADAPT:
             if isinstance(templates, (str, Path)):
                 templates = [templates]
             if isinstance(template_mhc_class, int):
-                template_mhc_class = [template_mhc_class]
+                template_mhc_class = [int(template_mhc_class)]
             if len(template_mhc_class)==1:
                 template_mhc_class = template_mhc_class*len(templates)
 
@@ -221,10 +222,10 @@ class ADAPT:
                     raise FileNotFoundError(f"Template {template} not found!")
                 elif template.is_dir():
                     self.templates.extend([p for p in template.glob("*.pdb") if not p.stem.endswith("_clean")])
-                    self.template_mhc_class.extend([mhc_class for p in template.glob("*.pdb") if not p.stem.endswith("_clean")])
+                    self.template_mhc_class.extend([int(mhc_class) for p in template.glob("*.pdb") if not p.stem.endswith("_clean")])
                 else:
                     self.templates.append(template)
-                    self.template_mhc_class.append(mhc_class)
+                    self.template_mhc_class.append(int(mhc_class))
             self.prepare_templates(self.templates, self.template_mhc_class)
             #print(f"templates: {self.templates}")
         self.save_templates = True
@@ -588,8 +589,9 @@ class ADAPT:
         # TODO: do I need the writer
         boltz_input, boltz_writer = joltz_spec.to_input(pad=True, cache=self.boltz_parameter_path)
         if not input_path is None:
-            loaded_input = JoltzInput(features=dict(np.load(input_path, allow_pickle=True)))
-
+            print(np.load(input_path, allow_pickle=True))
+            loaded_input = JoltzInput(features=np.load(input_path, allow_pickle=True)["arr_0"].item())
+            print(loaded_input)
             ## update input with cdr sequences
             #for start, end in self.cdr_coords.values():
             #    boltz_input.set_aa(input_design[start:end], start=start)
@@ -843,7 +845,9 @@ class ADAPT:
             "tcr_chain_index":(*[int(i) for i in self.tcr_chain_index],),"mhc_chain_index":(*[int(i) for i in self.mhc_chain_index],),
             "mhc_class":int(self.mhc_class),
             **{cdr:self.get_cdr_seq(design, cdr) for cdr in self.imgt_mapper.keys()},
-            **{f"{k}_coords":v for k, v in self.cdr_coords.items()},}
+            **{f"{k}_coords":v for k, v in self.cdr_coords.items()},
+            "out_time":None,
+            }
         print(row)
         self.append_scores(pd.Series(row), file_name)
         return score
@@ -997,7 +1001,9 @@ class ADAPT:
             "tcr_chain_index":(*[int(i) for i in self.tcr_chain_index],),"mhc_chain_index":(*[int(i) for i in self.mhc_chain_index],),
             "mhc_class":int(self.mhc_class),
             **{cdr:self.get_cdr_seq(scaffold, cdr) for cdr in self.imgt_mapper.keys()},
-            **{f"{k}_coords":v for k, v in self.cdr_coords.items()},}
+            **{f"{k}_coords":v for k, v in self.cdr_coords.items()},
+            "out_time":None,
+            }
 
         # compare to existing
         print("Replacing ",self.compare(file_name,row,family_limit=family_limit,full_limit=full_limit,))
@@ -1038,6 +1044,7 @@ class ADAPT:
                 out_name = scores_sub.sort_values("score", ascending=False).iloc[0].name
 
             scores.loc[out_name, "in_pool"] = False
+            scores.loc[out_name, "out_time"] = datetime.now().strftime("%Y-%d-%b_%H:%M:%S")
             print(f"Removing worst design {out_name} and adding {specs}.")
             if delete_file:
                 if not isinstance(file_name, Path):
@@ -1374,8 +1381,6 @@ class ADAPT:
             peptide = clean_chothia(peptide)
             if not peptide.suffix in [".pdb", ".cif"]:
                 peptide = peptide.with_suffix(".pdb")
-            if peptide.parent != self.in_dir:
-                peptide = self.in_dir/peptide
             return PDBFile(path=peptide).to_data()
 
         elif isinstance(peptide, str):

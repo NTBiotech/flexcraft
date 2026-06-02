@@ -109,7 +109,7 @@ def main():
         out_dir = Path(f"./").resolve()
     else:
         out_dir = (args.out_dir).resolve()
-    out_dir = out_dir/f"clustering_{datetime.now().strftime('%Y-%d-%b_%H:%M:%S')}_{args.mhc_class}"
+    #out_dir = out_dir/f"clustering_{datetime.now().strftime('%Y-%d-%b_%H:%M:%S')}_{args.mhc_class}"
     out_dir.mkdir(parents=True, exist_ok=True)
     table_path = (args.structure_table).resolve()
     table:pd.DataFrame = pd.read_csv(table_path)
@@ -120,9 +120,10 @@ def main():
 
     build_database(df=table, out_dir=out_dir, ab=False, chain_number=args.chain_number, mhc_class=args.mhc_class)
     
-    cmd = f"foldseek easy-multimercluster {out_dir/'foldseek'} {out_dir/'cluster_result'} $TMP \
+    cmd = f"foldseek easy-multimercluster {out_dir/'foldseek'} {out_dir/'cluster_result'} /tmp \
         -e 0.01 -c 0.0 --cov-mode 0 --interface-lddt-threshold {args.iplddt} --alignment-type 0 -v 2  \
             --gpu {args.gpu}"
+    from time import sleep
     if args.exec:
         import os
         print(f"Running {cmd}")
@@ -130,9 +131,8 @@ def main():
     else:
         # execute manually
         print("Execute this command: ", cmd, sep="\n")
-        from time import sleep
-        while not (out_dir/'cluster_result_cluster.tsv').exists():
-            sleep(5)
+    while not (out_dir/'cluster_result_cluster.tsv').exists():
+        sleep(5)
     clusters = pd.read_csv(out_dir/'cluster_result_cluster.tsv', delimiter="\t", header=None)
     clusters.columns = ["rep", "member"]
     # make subdirectories for the clusters
