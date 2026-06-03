@@ -102,15 +102,15 @@ if sys.platform == 'linux':
 elif sys.platform == 'darwin':
     address = ('https://ftp.ncbi.nlm.nih.gov/blast/executables/blast+/latest/ncbi-blast-2.17.0+-x64-macosx.tar.gz')
 else:
-    print('unrecognized platform type:', sys.platform,'expected "linux" or "darwin"')
+#    print('unrecognized platform type:', sys.platform,'expected "linux" or "darwin"')
     exit()'''
 
 def align_seq(x,y):
     aligner = Align.PairwiseAligner(scoring="blastp")
     alignments = aligner.align(x,y)
     alignment = max(alignments, key=lambda x: x.score)
-    print(f"Alignment score: {alignment.score}")
-    print(alignment)
+#    print(f"Alignment score: {alignment.score}")
+#    print(alignment)
     if alignment.score<1:
         raise ValueError(f"Alignment score of {alignment.score} is too low!")
     align = {}
@@ -120,7 +120,7 @@ def align_seq(x,y):
             pos1 = i-alignment[0][:i].count('-')
             pos2 = i-alignment[1][:i].count('-')
             align[pos1] = pos2
-    print(f"align dict: {align}")
+#    print(f"align dict: {align}")
     return align
 
 def get_mhc1_positions(
@@ -208,7 +208,7 @@ def get_mhc2_positions(
             assert db_files[c].suffix==".fasta"
             # check for blast database
             if not db_files[c].with_suffix(".fasta.phr").exists():
-                print(f"Created blastdb for {db_from_fasta(db_files[c], blast_exe, dbtype='prot')}")
+#                print(f"Created blastdb for {db_from_fasta(db_files[c], blast_exe, dbtype='prot')}")
 
             seq = SeqRecord(Seq(decode(design["aa"][mask], AF2_CODE)), id="mhc2_query", name="mhc 2")
             
@@ -232,18 +232,18 @@ def get_mhc2_positions(
                 if len(hits)<1:
                     raise AttributeError("No hits found!")
                 hit = hits.iloc[0]
-                print(f"Found hit with evalue {hit['evalue']}")
-                print(hit)
+#                print(f"Found hit with evalue {hit['evalue']}")
+#                print(hit)
                 if float(hit["evalue"])>0.5 and not reverse:
                     raise AttributeError(f"E-Value too high: {hit['evalue']}")
 
             align = align_from_blast(hit)
-            print("Aligner: ",align)
+#            print("Aligner: ",align)
             _positions = [align[x] for x in class2_alfas_positions_0indexed[c]]
             index = np.arange(len(design["aa"]))[mask]
             positions.update({c:np.array([index[x] for x in _positions])})
     except AttributeError as e:
-        print(e, "Running in reverse mode.")
+#        print(e, "Running in reverse mode.")
         if not reverse:
             return get_mhc2_positions(
                 design=design,
@@ -292,19 +292,19 @@ def get_axes(a,b)->Tuple[np.ndarray, np.ndarray]:
     return gram_schmidt(np.array((axis3,axis2,axis1))).T, center
 
 def check_direction(axis:np.ndarray, center:np.ndarray, reference:np.ndarray, covariate:np.ndarray|None=None):
-    print("Before correction: ",axis, covariate)
+#    print("Before correction: ",axis, covariate)
     if len(reference.shape)>1:
         reference = np.mean(reference,axis=(0,1))
     reference -= center
     reference /= np.linalg.norm(reference)
-    print(f"Correcting to {reference}")
+#    print(f"Correcting to {reference}")
     cosine = np.inner(axis, reference)
-    print(f"Angle is {np.degrees(np.arccos(cosine))}")
+#    print(f"Angle is {np.degrees(np.arccos(cosine))}")
     if cosine<0:
         axis=-axis
         if not covariate is None:
             covariate = -covariate
-    print("After correction: ",axis, covariate)
+#    print("After correction: ",axis, covariate)
     if covariate is None:
         return axis
     return axis, covariate
@@ -328,11 +328,11 @@ def plot_axes(
         n = normalize
         normalize=False
     if ax is None:
-        print("New plot axis")
+#        print("New plot axis")
         fig = plt.figure()
         ax = fig.add_subplot(projection='3d', )
     if axes is None or center is None:
-        print("Calculating Axes")
+#        print("Calculating Axes")
         axes, center = get_axes(a,b)
 
     axis1, axis2, axis3 = axes.T
@@ -430,7 +430,7 @@ def _convert_chains(input_design:DesignData, d:dict|None=None):
         d = {}
         for x,y in zip(np.sort(np.unique(input_design["chain_index"])), range(len(np.unique(input_design["chain_index"])))):
             d[int(x)]=int(y)
-    print(d)
+#    print(d)
     design = input_design.update(chain_index=np.array([d[int(x)] for x in input_design["chain_index"]]))
     return design, d
 
@@ -510,7 +510,7 @@ def parse_structure(
             positions=mhc_positions["B"])
     else:
         raise ValueError(f"Invalid mhc_class {mhc_class}!")
-    print(mhc_positions)
+#    print(mhc_positions)
     mhc_axes, mhc_center = get_axes(
             mhc_coords_0,
             mhc_coords_1
@@ -610,7 +610,7 @@ def translate_pose(
     design = design.copy()
     if not chains is None:
         chains = np.array(chains)
-        print("chains: ", chains)
+#        print("chains: ", chains)
         chain_mask = (np.array(design["chain_index"])[:,None]==chains[None,:]).any(axis=1)
         subset_design = design[chain_mask]
     else:
@@ -743,7 +743,7 @@ def get_mhc_pose(design, mhc_class, params:dict|None=None, blast_kwargs:dict={})
         design,_ = _convert_chains(design)
         design, params = number_anarci(design, mhc_class=mhc_class)
     if mhc_class==1:
-        print("Getting mhc positions for class 1")
+#        print("Getting mhc positions for class 1")
         mhc_positions = get_mhc1_positions(
             design=design,
             params=params,
@@ -755,7 +755,7 @@ def get_mhc_pose(design, mhc_class, params:dict|None=None, blast_kwargs:dict={})
             design=design,
             positions=mhc_positions[6:])
     elif mhc_class==2:
-        print("Getting mhc positions for class 2")
+#        print("Getting mhc positions for class 2")
         mhc_positions = get_mhc2_positions(
             design=design,
             params=params,
@@ -769,8 +769,8 @@ def get_mhc_pose(design, mhc_class, params:dict|None=None, blast_kwargs:dict={})
             positions=mhc_positions["B"])
     else:
         raise ValueError(f"Invalid mhc_class {mhc_class}!")
-    print("MHC Positions: ", mhc_positions)
-    print("MHC Coords: ", mhc_coords_0, mhc_coords_1, sep="\n")
+#    print("MHC Positions: ", mhc_positions)
+#    print("MHC Coords: ", mhc_coords_0, mhc_coords_1, sep="\n")
     mhc_pose = get_axes(
             mhc_coords_0,
             mhc_coords_1

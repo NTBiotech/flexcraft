@@ -1,5 +1,5 @@
 {
-"op_dir":"/p/home/jusers/toulouse1/juwels/project/toulouse1/flexcraft/data/adapt",
+"op_dir":"/home/hgf_dkfz/hgf_dsb0249/workspaces/haicwork/hgf_dsb0249-BinderDesign/flexcraft/data/adapt",
 "key":42,
 "boltz_config":{
     "docking":true,
@@ -30,8 +30,8 @@
 "trim":true,
 "chain_cache_len":550,
 "redesign_all_cdrs":false,
-"templates":["./data/adapt/clustering_mhc1/representative/", "./data/adapt/clustering_mhc2/representative/"],
-"template_mhc_class":[1,2],
+"templates":"./data/adapt/clustering_mhc1/representative/",
+"template_mhc_class":1,
 "blast_kwargs":{
     "db_files":{
         "A":"./data/adapt/input_data/bradleyetal/both_class_2_A_chains_v2.fasta",
