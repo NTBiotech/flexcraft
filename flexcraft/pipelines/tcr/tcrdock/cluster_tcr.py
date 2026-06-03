@@ -107,9 +107,9 @@ def main():
     args = parser.parse_args()
     if args.out_dir is None:
         out_dir = Path(f"./").resolve()
+        out_dir = out_dir/f"clustering_{datetime.now().strftime('%Y-%d-%b_%H:%M:%S')}_{args.mhc_class}"
     else:
         out_dir = (args.out_dir).resolve()
-    #out_dir = out_dir/f"clustering_{datetime.now().strftime('%Y-%d-%b_%H:%M:%S')}_{args.mhc_class}"
     out_dir.mkdir(parents=True, exist_ok=True)
     table_path = (args.structure_table).resolve()
     table:pd.DataFrame = pd.read_csv(table_path)
@@ -117,9 +117,12 @@ def main():
     table = table[table["Species"]=="Human"]
     table = table[table["Resolution"].astype(float)<4]
     table:pd.DataFrame = table.sort_values("Release date", ascending=False)[:400]
-
-    build_database(df=table, out_dir=out_dir, ab=False, chain_number=args.chain_number, mhc_class=args.mhc_class)
-    
+    if not (out_dir/'foldseek').exists():
+        build_database(df=table, out_dir=out_dir, ab=False, chain_number=args.chain_number, mhc_class=args.mhc_class)
+    else:
+        for p in out_dir.glob("*"):
+            if p.stem.startswith("cluster") or p.stem=="representative":
+                p.unlink()
     cmd = f"foldseek easy-multimercluster {out_dir/'foldseek'} {out_dir/'cluster_result'} /tmp \
         -e 0.01 -c 0.0 --cov-mode 0 --interface-lddt-threshold {args.iplddt} --alignment-type 0 -v 2  \
             --gpu {args.gpu}"
@@ -146,6 +149,7 @@ def main():
     # make subdirectory with representative structures for the 4 most populates clusters 
     counts = clusters["rep"].value_counts()
     counts = counts[counts>1]
+    counts = counts.sort_values(ascending=False)[:3]
     reps = counts.index.map(lambda x: x.split("_")[0]).to_list()
     print(f"Representatives: {counts}")
     rep_dir = out_dir/"representative"

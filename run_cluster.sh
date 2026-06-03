@@ -1,4 +1,4 @@
-#!/bin/bash -x
+#!/bin/bash 
 #SBATCH --job-name=adapt
 #SBATCH --time=00:30:00
 #SBATCH --account=hai_1252
@@ -16,22 +16,21 @@
 #SBATCH --gres=gpu:1
 # For gpus and and booster partition
 
-CONDA_PATH="miniforge3"             # path to miniforge or ... relative to project dir
+CONDA_PATH="../miniforge3"             # path to miniforge or ... relative to project dir
 CONDA_ENV="flexcraft"               # e.g. flexcraft
 PROJECT_NAME="hai_1252"             # project id on cluster
 REPO_NAME="flexcraft"
 
-jutil env activate -p "$PROJECT_NAME"
-PROJECT_DIR="$PROJECT"   # absolute path on cluster
-module purge
-module load CUDA-Python/12
-source ~/.bashrc
-cd "$PROJECT_DIR/toulouse1"
-
+#jutil env activate -p "$PROJECT_NAME"
+#PROJECT_DIR="$PROJECT"   # absolute path on cluster
+#module purge
+#module load CUDA-Python/12
+#source ~/.bashrc
+#cd "$PROJECT_DIR/toulouse1"
+#pwd
 source "$CONDA_PATH/bin/activate"
 conda activate "$CONDA_ENV"
 
-cd "${REPO_NAME}"
-pwd
+#cd "${REPO_NAME}"
 
-python flexcraft/pipelines/tcr/tcrdock/cluster_tcr.py --exec --out_dir data/adapt/clustering_mhc2 --structure_table data/adapt/input_data/tcr3d_data/mhc2.csv --mhc_class 1 --iplddt 0.7 --gpu 1
+python flexcraft/pipelines/tcr/tcrdock/cluster_tcr.py --exec --out_dir data/adapt/clustering_mhc2 --structure_table data/adapt/input_data/tcr3d_data/mhc2.csv --mhc_class 2 --iplddt 0.68 --gpu 0
