@@ -96,6 +96,11 @@ core_positions_generic_1x = [
 102, 103, 104 ## 104 is C
 ]
 # (1 indexed)
+
+origin_pose=(
+        np.array([[1,0,0], [0,1,0], [0,0,1]]), np.array([0,0,0])
+    )
+    
 ''' installation of ncbi blast
 if sys.platform == 'linux':
     address = ('https://ftp.ncbi.nlm.nih.gov/blast/executables/blast+/latest/ncbi-blast-2.17.0+-x64-linux.tar.gz')
@@ -208,7 +213,7 @@ def get_mhc2_positions(
             assert db_files[c].suffix==".fasta"
             # check for blast database
             if not db_files[c].with_suffix(".fasta.phr").exists():
-#                print(f"Created blastdb for {db_from_fasta(db_files[c], blast_exe, dbtype='prot')}")
+                print(f"Created blastdb for {db_from_fasta(db_files[c], blast_exe, dbtype='prot')}")
 
             seq = SeqRecord(Seq(decode(design["aa"][mask], AF2_CODE)), id="mhc2_query", name="mhc 2")
             
@@ -798,23 +803,25 @@ def _parse_structure(
     design,
     mhc_class,
     blast_kwargs:dict={},
+    params:None|dict=None,
     ):
 
-    design,_ = _convert_chains(design)
-    design, params = number_anarci(design, mhc_class=mhc_class)
+    if params is None:
+        design,_ = _convert_chains(design)
+        design, params = number_anarci(design, mhc_class=mhc_class)
+    else:
+        design,_ = number_anarci(design, mhc_class=mhc_class)
     tcr_pose = get_tcr_pose(design, params=params)
     # get mhc stub
     mhc_pose = get_mhc_pose(design, mhc_class=mhc_class, params=params, blast_kwargs=blast_kwargs)
     return design, params, mhc_pose, tcr_pose
 
-origin_pose=(
-        np.array([[1,0,0], [0,1,0], [0,0,1]]), np.array([0,0,0])
-    )
-
-def set_tcr_pose(design, target_pose:tuple|list, mhc_class, blast_kwargs:dict={}):
+def set_tcr_pose(design, target_pose:tuple|list, mhc_class, blast_kwargs:None|dict={}, params:None|dict=None):
     '''Apply a tcr pose to a DesignData object.'''
+    if blast_kwargs is None:
+        blast_kwargs = {}
     # TODO: cache the parsing in ADAPT
-    design, params, mhc_pose, tcr_pose = _parse_structure(design, mhc_class=mhc_class, blast_kwargs=blast_kwargs)
+    design, params, mhc_pose, tcr_pose = _parse_structure(design, mhc_class=mhc_class, blast_kwargs=blast_kwargs, params=params)
 
     # align tcr to mhc_pose
     design = translate_pose(
@@ -845,9 +852,12 @@ def set_tcr_pose(design, target_pose:tuple|list, mhc_class, blast_kwargs:dict={}
         chains=params["tcr_chain_index"]
     )
 
-def get_centered_tcr_pose(design, mhc_class, blast_kwargs:dict={}):
+def get_centered_tcr_pose(design, mhc_class, blast_kwargs:None|dict={}):
     '''Get the tcr pose, with mhc aligned to the origin.'''
     
+    if blast_kwargs is None:
+        blast_kwargs = {}
+
     mhc_pose = get_mhc_pose(design, mhc_class=mhc_class, blast_kwargs=blast_kwargs)
 
     design = center_design(design, mhc_pose)

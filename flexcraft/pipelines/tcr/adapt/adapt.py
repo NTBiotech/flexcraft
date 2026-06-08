@@ -580,6 +580,9 @@ class ADAPT:
         chain_index = input_design["chain_index"]
         input_design, pad_length = self.pad_design(input_design=input_design)
 
+        use_msa = self.boltz_msa
+        if not input_path is None:
+            use_msa = False
         joltz_spec = JoltzSpec().add_protein(input_design.to_sequence_string(), use_msa=self.boltz_msa)
         if templates:
             if self.get_templates(input_design):
@@ -595,7 +598,7 @@ class ADAPT:
             ## update input with cdr sequences
             #for start, end in self.cdr_coords.values():
             #    boltz_input.set_aa(input_design[start:end], start=start)
-            boltz_input.inherit_msa(loaded_input)
+            boltz_input = boltz_input.inherit_msa(loaded_input)
 
         if num_samples is None:
             num_samples = self.boltz_num_samples
@@ -952,8 +955,10 @@ class ADAPT:
             # check if boltz input exists
             input_path = (self.boltz_input_dir/scaffold_name).with_suffix(".npz")
             if input_path.exists():
+                print(f"Using cached input at {input_path}")
                 boltz_designs = self.boltz_docking_step(input_design=scaffold, input_path=input_path)
             else:
+                print(f"No cached input available")
                 boltz_designs, boltz_input = self.boltz_docking_step(input_design=design, return_input=True)
                 np.savez(input_path,
                     boltz_input.features)
@@ -1378,10 +1383,18 @@ class ADAPT:
             return peptide
 
         elif isinstance(peptide, Path):
-            peptide = clean_chothia(peptide)
-            if not peptide.suffix in [".pdb", ".cif"]:
-                peptide = peptide.with_suffix(".pdb")
-            return PDBFile(path=peptide).to_data()
+            lock = FileLock(peptide.with_suffix(".lock"))
+            with lock:
+                peptide = clean_chothia(peptide)
+                if not peptide.suffix in [".pdb", ".cif"]:
+                    peptide = peptide.with_suffix(".pdb")
+                # try twice in case of concurrent reading
+                try:
+                    design = PDBFile(path=peptide).to_data()
+                except ValueError:
+                    design = PDBFile(path=peptide).to_data()
+            
+            return design
 
         elif isinstance(peptide, str):
             return DesignData.from_sequence(peptide)
@@ -1503,7 +1516,11 @@ class ADAPT:
         if not self.tcr_poses is None:
             print("Setting templates!")
             from flexcraft.pipelines.tcr.tcrdock import set_tcr_pose
-            self.template_structures = [set_tcr_pose(design.copy(), target_pose=pose, mhc_class=self.mhc_class, blast_kwargs=self.blast_kwargs) for pose in self.tcr_poses]
+            params = {
+                "mhc_chain_index":self.mhc_chain_index,
+                "tcr_chain_index":self.tcr_chain_index
+            }
+            self.template_structures = [set_tcr_pose(design.copy(), target_pose=pose, mhc_class=self.mhc_class, blast_kwargs=self.blast_kwargs, params=params) for pose in self.tcr_poses]
             print("template poses: ", self.tcr_poses)
             self.set_templates = True
             self.template_paths = []
