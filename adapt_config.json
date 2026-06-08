@@ -10,7 +10,7 @@
     "num_samples":5,
     "num_sampling_steps":25,
     "deterministic":false,
-    "msa":false
+    "msa":true
 },
 "af2_config":{
     "model":null,
