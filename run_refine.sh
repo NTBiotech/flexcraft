@@ -4,7 +4,7 @@
 #SBATCH --nodes=1
 #SBATCH --cpus-per-task=2
 #SBATCH --mem=15GB
-#SBATCH --time=00:20:00
+#SBATCH --time=02:00:00
 #SBATCH --gres=gpu:full:1
 #SBATCH --output=logs/adapt_refine_%j.out
 #SBATCH --error=logs/adapt_refine_%j.err

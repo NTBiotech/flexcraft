@@ -37,6 +37,7 @@ import anarci
 
 from pathlib import Path
 from typing import List, Tuple, Optional, Dict, Iterable, Callable
+from pandas._typing import Axes
 from datetime import datetime
 import tempfile
 
@@ -64,8 +65,8 @@ class ADAPT:
         boltz_config:dict={},
         af2_config:dict={},
         pmpnn_config:dict={},
-        mhc_chain_index:int|tuple[int]=0,
-        tcr_chain_index:int|tuple[int]=(2,3),
+        mhc_chain_index:tuple[int]=(0,),
+        tcr_chain_index:tuple[int,int]=(2,3),
         name="AdaptTrial",
         out_dir:None|str|Path=None,
         trim:bool=True,
@@ -164,7 +165,7 @@ class ADAPT:
         self.lock = FileLock(self.scores.with_suffix(".lock"))
         if not (self.scores).exists():
             self.lock.acquire()
-            pd.DataFrame(columns=self.columns).to_csv(self.scores, header=True)
+            pd.DataFrame(columns=np.array(self.columns)).to_csv(self.scores, header=True)
             self.lock.release()
         else:
             self.columns = list(pd.read_csv(self.scores, header=0, index_col=0).columns)
@@ -173,11 +174,7 @@ class ADAPT:
         self.chain_cache_len = chain_cache_len
         # chain indices
         # pack in array for comparative operations
-        if isinstance(mhc_chain_index, int):
-            mhc_chain_index = (mhc_chain_index,)
         self.mhc_chain_index = np.array(mhc_chain_index)
-        if isinstance(tcr_chain_index, int):
-            tcr_chain_index = (tcr_chain_index,)
         self.tcr_chain_index = np.array(tcr_chain_index)
         
         self.key = key
@@ -583,10 +580,12 @@ class ADAPT:
         use_msa = self.boltz_msa
         if not input_path is None:
             use_msa = False
+        print_dd(input_design, f"Joltz input design use_msa: {use_msa}")
         joltz_spec = JoltzSpec().add_protein(input_design.to_sequence_string(), use_msa=self.boltz_msa)
         if templates:
             if self.get_templates(input_design):
                 for template in self.template_paths:
+                    print_dd(template, "BoltzDocking Template")
                     joltz_spec = joltz_spec.add_template(template)
 
         # TODO: do I need the writer
