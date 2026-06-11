@@ -14,5 +14,5 @@ OUT_DIR="./data/adapt/full_run_${current_time}"
 WD="/home/hgf_dkfz/hgf_dsb0249/workspaces/haicwork/hgf_dsb0249-BinderDesign/flexcraft"
 CONDA_ENV="flexcraft"
 FAMILY_LIMIT=10
-FULL_LIMIT=400
+FULL_LIMIT=200
 N_GPUS=2

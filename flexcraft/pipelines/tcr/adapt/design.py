@@ -63,6 +63,7 @@ if not templates is None:
     config.update(template_mhc_class=list(template_mhc_class))
 
 for mhc, peptide in zip(mhcs, peptides):
+    print(f"---Designing mhc {mhc} with peptide {peptide}---")
     if (len(mhcs)>1) and (len(peptides)>1):
         config.update({"out_dir":Path(out_dir)/f"{mhc}_{peptide}"})  # pyright: ignore[reportOperatorIssue]
 
@@ -70,7 +71,6 @@ for mhc, peptide in zip(mhcs, peptides):
         **config
     )
 
-    print(f"---Designing mhc {mhc} with peptide {peptide}---")
     get_structure = False
     # table with the right columns
     if mhc.endswith(".csv"):

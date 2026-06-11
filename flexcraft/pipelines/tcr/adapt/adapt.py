@@ -174,6 +174,7 @@ class ADAPT:
         self.chain_cache_len = chain_cache_len
         # chain indices
         # pack in array for comparative operations
+
         self.mhc_chain_index = np.array(mhc_chain_index)
         self.tcr_chain_index = np.array(tcr_chain_index)
         
@@ -578,17 +579,18 @@ class ADAPT:
         input_design, pad_length = self.pad_design(input_design=input_design)
 
         use_msa = self.boltz_msa
+        # we assume input path also contains msa information
         if not input_path is None:
             use_msa = False
         print_dd(input_design, f"Joltz input design use_msa: {use_msa}")
-        joltz_spec = JoltzSpec().add_protein(input_design.to_sequence_string(), use_msa=self.boltz_msa)
+        # define a joltz spec with the protein of interest
+        joltz_spec = JoltzSpec().add_protein(input_design.to_sequence_string(), use_msa=use_msa)
+        # add design as templates
         if templates:
             if self.get_templates(input_design):
                 for template in self.template_paths:
-                    print_dd(template, "BoltzDocking Template")
                     joltz_spec = joltz_spec.add_template(template)
 
-        # TODO: do I need the writer
         boltz_input, boltz_writer = joltz_spec.to_input(pad=True, cache=self.boltz_parameter_path)
         if not input_path is None:
             print(np.load(input_path, allow_pickle=True))
@@ -1359,6 +1361,7 @@ class ADAPT:
         # check if chain indices correct
         if self.tcr_chain_index[0]==self.tcr_chain_index[1]:
             raise ValueError("TCR chains identical! Currently only 2 chain tcrs supported.")
+        print(self.mhc_chain_index, self.tcr_chain_index)
         if (self.mhc_chain_index[:,None] == self.tcr_chain_index[None,:]).any() or classify_all:
             # fix mhc chain index to longest non-tcr chain
             chains = np.unique(input_design["chain_index"])
@@ -1388,10 +1391,7 @@ class ADAPT:
                 if not peptide.suffix in [".pdb", ".cif"]:
                     peptide = peptide.with_suffix(".pdb")
                 # try twice in case of concurrent reading
-                try:
-                    design = PDBFile(path=peptide).to_data()
-                except ValueError:
-                    design = PDBFile(path=peptide).to_data()
+                design = PDBFile(path=peptide).to_data()
             
             return design
 

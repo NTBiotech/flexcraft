@@ -23,7 +23,7 @@
     "model":null,
     "parameter_path":"./params/pmpnn/v_48_020.pkl",
     "hparams":{}},
-"mhc_chain_index":0,
+"mhc_chain_index":[0,],
 "tcr_chain_index":[2,3],
 "name":"testing_design",
 "out_dir":null,
