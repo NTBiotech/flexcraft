@@ -101,11 +101,15 @@ for mhc, peptide in zip(mhcs, peptides):
         print(f"Using Binder {binder}...")
         if len(binder)==4:
             # assume pdb id
-            binder = download_structure(
-                binder,
-                file_format="antibody" if args.ab else "biological assembly",
-                out_dir=config["op_dir"]+"/input_data"
-            )
+            binder_path = config["op_dir"]+f"/input_data/{binder}.pdb"
+            if not binder_path.exists():
+                binder = download_structure(
+                    binder,
+                    file_format="antibody" if args.ab else "biological assembly",
+                    out_dir=config["op_dir"]+"/input_data"
+                )
+            else:
+                binder = binder_path
         # else assume pdb path
         binder_path = clean_chothia(binder)
         print("Components: ",binder_path,mhc_seq,peptide,sep="\n---\n")
