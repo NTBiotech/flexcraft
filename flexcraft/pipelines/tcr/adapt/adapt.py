@@ -162,7 +162,7 @@ class ADAPT:
             ]
         self.columns_default = {"in_pool":True}
         self.scores = self.out_dir/"scores.csv"
-        self.lock = FileLock(self.scores.with_suffix(".lock"))
+        self.lock = FileLock(self.scores.__str__()+".lock")
         if not (self.scores).exists():
             self.lock.acquire()
             pd.DataFrame(columns=np.array(self.columns)).to_csv(self.scores, header=True)
@@ -892,6 +892,7 @@ class ADAPT:
         design = self.convert_chains(design)
         print(f"Loaded Design {row.name} with cdr_coords {self.cdr_coords}!")
         print_dd(design, "Loaded Design!")
+        self.set_templates = False
         return design, row.name, row["scaffold"]
 
     def convert_chains(self, input_design:DesignData):
@@ -1385,7 +1386,7 @@ class ADAPT:
             return peptide
 
         elif isinstance(peptide, Path):
-            lock = FileLock(peptide.with_suffix(".lock"))
+            lock = FileLock(peptide.__str__()+".lock")
             with lock:
                 peptide = clean_chothia(peptide)
                 if not peptide.suffix in [".pdb", ".cif"]:
