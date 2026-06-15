@@ -202,6 +202,7 @@ class ADAPT:
         self.blast_kwargs = blast_kwargs
         self.templates = []
         self.template_mhc_class = []
+        self.template_locks = []
         # expand template directories and mhc classes
         if not templates is None and not template_mhc_class is None:
             if isinstance(templates, (str, Path)):
@@ -249,7 +250,7 @@ class ADAPT:
         self.boltz_redocking = config["redocking"]
         if self.boltz_redocking:
             raise DeprecationWarning("Boltz redocking is deprecated!")
-        if self.boltz_docking or self.boltz_redocking:
+        if True:# self.boltz_docking or self.boltz_redocking:
             self.boltz_parameter_path = config["parameter_path"]
             self.boltz_model_name = config["model_name"]
             self.boltz_num_recycle = config["num_recycle"]
@@ -524,14 +525,16 @@ class ADAPT:
             len(design["aa"])
         ))
         af_input = AFInput.from_data(design)
-
+        if templates is None:
+            off_target_template = True
         if off_target_template:
             if is_target is None:
                 print("No is_target input. Not adding template!")
             else:
                 af_input = af_input.add_template(design, where=~is_target)
         if self.get_templates(design):
-            for template in self.template_structures:
+            for template, lock in zip(self.template_structures, self.template_locks):
+                lock.acquire()
                 template, _ = self.pad_design(template.copy())
                 af_input = af_input.add_template(template, where=~is_target)
         if not templates is None:
@@ -542,6 +545,9 @@ class ADAPT:
         af_result = self.af_infer(af_input=af_input)
         design, is_target = self.rm_pad(af_result.to_data(), pad_length, is_target)
         self.set_templates = False
+        # release eventual locks
+        for lock in self.template_locks:
+            lock.release()
         if evaluate:
             score = self.evaluate_step(result=design, input_design=input_design, is_target=is_target)
             if save_structure:
@@ -549,7 +555,7 @@ class ADAPT:
                     save_structure = "evaluated_structure.pdb"
                 design.save_pdb(self.out_dir/save_structure)
             return design, score
-        
+
         if save_structure:
             if isinstance(save_structure, bool):
                 save_structure = "docked_structure.pdb"
@@ -588,14 +594,19 @@ class ADAPT:
         # add design as templates
         if templates:
             if self.get_templates(input_design):
-                for template in self.template_paths:
+                for template, lock in zip(self.template_paths, self.template_locks):
+                    lock.acquire()
                     joltz_spec = joltz_spec.add_template(template)
-
-        boltz_input, boltz_writer = joltz_spec.to_input(pad=True, cache=self.boltz_parameter_path)
+        try:
+            boltz_input, boltz_writer = joltz_spec.to_input(pad=True, cache=self.boltz_parameter_path)
+        except IndexError as err:
+            print("Encountered IndexError: {err} in preparing JoltzInput.\nRepeating...")
+            boltz_input, boltz_writer = joltz_spec.to_input(pad=True, cache=self.boltz_parameter_path)
         if not input_path is None:
-            print(np.load(input_path, allow_pickle=True))
-            loaded_input = JoltzInput(features=np.load(input_path, allow_pickle=True)["arr_0"].item())
-            print(loaded_input)
+            with FileLock(input_path.__str__()+".lock"):
+                print(np.load(input_path, allow_pickle=True))
+                loaded_input = JoltzInput(features=np.load(input_path, allow_pickle=True)["arr_0"].item())
+                print(loaded_input)
             ## update input with cdr sequences
             #for start, end in self.cdr_coords.values():
             #    boltz_input.set_aa(input_design[start:end], start=start)
@@ -603,7 +614,7 @@ class ADAPT:
 
         if num_samples is None:
             num_samples = self.boltz_num_samples
-        
+
         boltz_result = self.boltz_predictor(
             self.key(),
             self.boltz_params,
@@ -611,6 +622,9 @@ class ADAPT:
             num_samples=num_samples
             )
         self.set_templates = False
+        # release evtl. acquired locks
+        for lock in self.template_locks:
+            lock.release()
 
         if save_structure:
             boltz_prediction = JoltzPrediction(data=boltz_result.data, writer=boltz_writer)
@@ -1393,7 +1407,6 @@ class ADAPT:
                     peptide = peptide.with_suffix(".pdb")
                 # try twice in case of concurrent reading
                 design = PDBFile(path=peptide).to_data()
-            
             return design
 
         elif isinstance(peptide, str):
@@ -1473,14 +1486,14 @@ class ADAPT:
         
         if self.trim:
             scaffold =  self.trim_design(scaffold)
-        
+
         if get_structure:
             scaffold = self.boltz_docking_step(
-                scaffold,
-                return_input=False,
-                templates=False,
-                num_samples=1
-            )[0]
+                    scaffold,
+                    return_input=False,
+                    templates=False,
+                    num_samples=1
+                )[0]
         self.set_templates = False
         return scaffold, scaffold_name
     
@@ -1524,12 +1537,18 @@ class ADAPT:
             print("template poses: ", self.tcr_poses)
             self.set_templates = True
             self.template_paths = []
+            self.template_locks = []
             if self.save_templates:
                 for n,t in enumerate(self.template_structures):
                     print(self.out_dir/f"template_{n}.pdb")
                     print_dd(t, f"template {n}")
                     t,_ = self.pad_design(t)
-                    t.save_pdb(self.boltz_input_dir/f"template_{n}.pdb")
-                    self.template_paths.append(pdb_to_pdb(str(self.boltz_input_dir/f"template_{n}.pdb")))
+                    i=0
+                    p = self.boltz_input_dir/f"template_{n}_{i}.pdb"
+                    while p.exists():
+                        p = self.boltz_input_dir/f"template_{n}_{i}.pdb"
+                    t.save_pdb(p)
+                    self.template_paths.append(p.__str__())
+                    self.template_locks.append(FileLock(p.with_suffix(".lock")))
             return True
         return False

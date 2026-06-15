@@ -71,11 +71,7 @@ current_time=$(date +"%Y-%m-%d_%H:%M:%S")
 ADAPT_CONFIG=$1
 RUN_CONFIG=$2
 source $RUN_CONFIG
-
 mkdir $OUT_DIR
-#OUT_DIR="/p/home/jusers/toulouse1/juwels/project/toulouse1/flexcraft/data/adapt/full_run_2026-06-02_13:24:50"
-pwd
-#python flexcraft/pipelines/tcr/tcrdock/cluster_tcr.py --exec --out_dir data/adapt/clustering_mhc1 --structure_table data/adapt/input_data/tcr3d_data/mhc1.csv --mhc_class 1 --iplddt 0.8 --gpu 1
 
 
 # launch designers for all binders
@@ -90,7 +86,6 @@ if [ $binders_per_task -le 0 ]; then
 fi
 echo "binders_per_task $binders_per_task"
 
-
 pids=()
 i=0
 
@@ -103,31 +98,15 @@ for slice in $(seq 0 $binders_per_task $(($n_binders-1))); do
     echo "assigning slice ${slice} to GPU ${gpu}"
     
     if [ "$TYPE" = "ab" ]; then
-    CUDA_VISIBLE_DEVICES=$gpu python ./flexcraft/pipelines/tcr/adapt/design.py --config $ADAPT_CONFIG --peptide $PEPTIDE --mhc_allele $MHC_ALLELE --binder $binders --cdrs $CDR_FILE --ab --out_dir $OUT_DIR --random_cdr --design_steps $N_DESIGN &
+    CUDA_VISIBLE_DEVICES=$gpu python ./flexcraft/pipelines/tcr/adapt/design.py --config $ADAPT_CONFIG --peptide $PEPTIDE --mhc_allele $MHC_ALLELE --binder $binders --cdrs $CDR_FILE --ab --out_dir $OUT_DIR --random_cdr --design_steps $N_DESIGN --prepare_only &
     fi
     if [ "$TYPE" = "tcr" ]; then
-    CUDA_VISIBLE_DEVICES=$gpu python ./flexcraft/pipelines/tcr/adapt/design.py --config $ADAPT_CONFIG --peptide $PEPTIDE --mhc_allele $MHC_ALLELE --binder $binders --cdrs $CDR_FILE --out_dir $OUT_DIR --random_cdr --design_steps $N_DESIGN &
+    CUDA_VISIBLE_DEVICES=$gpu python ./flexcraft/pipelines/tcr/adapt/design.py --config $ADAPT_CONFIG --peptide $PEPTIDE --mhc_allele $MHC_ALLELE --binder $binders --cdrs $CDR_FILE --out_dir $OUT_DIR --random_cdr --design_steps $N_DESIGN --prepare_only &
     fi
     pids+=("$!")
     i=$(( i + 1 ))
 done
-# wait for designs to finish
-for pid in ${pids[*]}; do
-    wait $pid
-done
-
-pids=()
-i=0
-refine_per_task=$(($N_REFINEMENT / $N_TASKS))
-echo "refinements per task: ${refine_per_task}"
-for n in $(seq $N_TASKS); do
-    echo "Refine task ${n}..."
-    gpu=$(( i % N_GPUS ))
-    CUDA_VISIBLE_DEVICES=$gpu python ./flexcraft/pipelines/tcr/adapt/refine.py --designed_dir $OUT_DIR --refine_steps $refine_per_task --cdrs acdr3 bcdr3  --config $ADAPT_CONFIG --family_limit $FAMILY_LIMIT --full_limit $FULL_LIMIT &
-    pids+=("$!")
-    i=$(( i + 1 ))
-done
-# wait for refinement to finish
+# wait for runs to finish
 for pid in ${pids[*]}; do
     wait $pid
 done

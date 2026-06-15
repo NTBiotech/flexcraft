@@ -30,10 +30,8 @@ parser.add_argument("--template_mhc_class", nargs="*", default=None,
     help="Add MHC class of templates. If one element, is broadcasted to all templates.")
 parser.add_argument("--mhc_class", type=int, default=None)
 
-parser.add_argument("--config", default="./config.json",)
 
-parser.add_argument("--prepared", action="store_true", help="Wether input binders are prepared or need to be constructed.")
-parser.add_argument("--prepare_only", action="store_true", help="If True, only scaffolds are prepared in out_dir.")
+parser.add_argument("--config", default="./config.json",)
 
 
 # parse arguments
@@ -46,74 +44,60 @@ out_dir = args.out_dir
 templates = args.templates
 template_mhc_class = args.template_mhc_class
 
-# unpack binders if dir
-_binders = []
-for binder in binders:
-    if Path(binder).is_dir():
-        _binders.extend([p for p in Path(binder).glob("*.pdb")])
-    else:
-        _binders.append(binder)
-binders = _binders
+if not args.mhc_class is None:
+    config.update(mhc_class = args.mhc_class)
 
 # cdr generator
 cdrs_gen = cdr_parser(args.cdrs, random=args.random_cdr, cdr_length=args.cdr_length, patience=100)
-
-if not args.mhc_class is None:
-    config.update(mhc_class = args.mhc_class)
-if not args.out_dir == Path(".") or "out_dir" not in config.keys():
-    # set out directory if not default
+# out directory
+if not args.out_dir == Path("."):
     config.update(out_dir=args.out_dir)
-if not templates is None:
-    config.update(templates=list(templates))
-    config.update(template_mhc_class=list(template_mhc_class))
 
 if (len(mhcs)>1) and (len(peptides)>1):
-    # make parent for each combi
     out_dir = config.get("out_dir", config.get("op_dir", ".")+f"adapt_design_{datetime.now().strftime('%Y-%d-%b_%H:%M:%S')}/")
     if not out_dir.exists():
         out_dir.mkdir()
 
+if not templates is None:
+    config.update(templates=list(templates))
+    config.update(template_mhc_class=list(template_mhc_class))
+
 for mhc, peptide in zip(mhcs, peptides):
     print(f"---Designing mhc {mhc} with peptide {peptide}---")
     if (len(mhcs)>1) and (len(peptides)>1):
-        # make subdir for each combination
         config.update({"out_dir":Path(out_dir)/f"{mhc}_{peptide}"})  # pyright: ignore[reportOperatorIssue]
 
     adapt = ADAPT(
         **config
     )
     config["boltz_config"].update(predictor=adapt.boltz_predictor)
-    config["af2_config"].update(af2_model=adapt.af2_model)
-    config["af2_config"].update(af2_params=adapt.af2_params)
+    config["af_config"].update(af2_model=adapt.af2_model)
+    config["af_config"].update(af2_params=adapt.af2_params)
     
     get_structure = False
-    if args.prepared:
-        peptide=None
-        mhc_seq=None
-    else:
-        # table with the right columns
-        if mhc.endswith(".csv"):
-            table:pd.DataFrame = pd.read_csv(mhc)
-            if "Bound to TCR" in table.columns:
-                table = table[~table["Bound to TCR"].astype(bool)]
-            if "Species" in table.columns:
-                table = table[table["Species"]=="Human"]
-            if "Resolution" in table.columns:
-                table = table[table["Resolution"].astype(float)<4]
-            mhc = table.sample(1)["PDB ID"]
-        # HLA id
-        if mhc.startswith("HLA"):
-            mhc_seq = get_mhc(accession=mhc)
-            get_structure=True
-        elif mhc[1] == "*":
-            mhc_seq = get_mhc(name=mhc)
-            get_structure=True
-        # PDB ID
-        elif len(mhc) == 4:
-            mhc_seq = clean_chothia(download_structure(mhc, file_format="biological assembly", out_dir=config["op_dir"]+"/input_data"))
-        # pdb file
-        elif mhc.endswith(".pdb"):
-            mhc_seq = clean_chothia(mhc)
+    # table with the right columns
+    if mhc.endswith(".csv"):
+        table:pd.DataFrame = pd.read_csv(mhc)
+        if "Bound to TCR" in table.columns:
+            table = table[~table["Bound to TCR"].astype(bool)]
+        if "Species" in table.columns:
+            table = table[table["Species"]=="Human"]
+        if "Resolution" in table.columns:
+            table = table[table["Resolution"].astype(float)<4]
+        mhc = table.sample(1)["PDB ID"]
+    # HLA id
+    if mhc.startswith("HLA"):
+        mhc_seq = get_mhc(accession=mhc)
+        get_structure=True
+    elif mhc[1] == "*":
+        mhc_seq = get_mhc(name=mhc)
+        get_structure=True
+    # PDB ID
+    elif len(mhc) == 4:
+        mhc_seq = clean_chothia(download_structure(mhc, file_format="biological assembly", out_dir=config["op_dir"]+"/input_data"))
+    # pdb file
+    elif mhc.endswith(".pdb"):
+        mhc_seq = clean_chothia(mhc)
         
 
     for binder in binders:
@@ -128,15 +112,9 @@ for mhc, peptide in zip(mhcs, peptides):
                     out_dir=config["op_dir"]+"/input_data"
                 )
             else:
-                # assume path to pdb
                 binder = binder_path
-        if Path(binder).exists():
-            # else assume pdb path
-            binder_path = clean_chothia(binder)
-        else:
-            # assume sequence
-            binder_path = binder
-
+        # else assume pdb path
+        binder_path = clean_chothia(binder)
         print("Components: ",binder_path,mhc_seq,peptide,sep="\n---\n")
 
         for n in range(args.design_steps):
@@ -150,14 +128,4 @@ for mhc, peptide in zip(mhcs, peptides):
                 replace_antigen=True,
                 get_structure=get_structure
             )
-            if args.prepare_only:
-                scaffold.save_pdb((config["out_dir"]/scaffold_name).with_suffix(".pdb"))
-            else:
-                adapt.design_trial(
-                    design=scaffold,
-                    scaffold_name=scaffold_name,
-                    cdrs=list(cdrs.keys())
-                )
-print(f"Finished design run!\n")
-if (len(mhcs)>1) and (len(peptides)>1):
-    print("Collected results at: ",collect_results(Path(out_dir), pattern=f"**/*{adapt.name}*", save=True))
+            scaffold.save_pdb((out_dir/scaffold_name).with_suffix(".pdb"))

@@ -1,5 +1,5 @@
 #!/bin/bash 
-#SBATCH --job-name=adapt
+#SBATCH --job-name=adapt_cluster
 #SBATCH --time=00:30:00
 #SBATCH --account=hai_1252
 # budget account where contingent is taken from
@@ -33,4 +33,4 @@ conda activate "$CONDA_ENV"
 
 #cd "${REPO_NAME}"
 
-python flexcraft/pipelines/tcr/tcrdock/cluster_tcr.py --exec --out_dir data/adapt/clustering_mhc2 --structure_table data/adapt/input_data/tcr3d_data/mhc2.csv --mhc_class 2 --iplddt 0.68 --gpu 0
+python flexcraft/pipelines/tcr/tcrdock/cluster_tcr.py --exec --out_dir data/adapt/clustering_mhc1 --structure_table data/adapt/input_data/tcr3d_data/mhc1.csv --mhc_class 1 --iplddt 0.68 --gpu 0

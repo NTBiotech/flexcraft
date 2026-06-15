@@ -1,6 +1,6 @@
-#!/bin/bash -x
+#! /usr/bin/bash
 #SBATCH --job-name=adapt
-#SBATCH --time=24:00:00
+#SBATCH --time=02:00:00
 #SBATCH --account=hai_1252
 # budget account where contingent is taken from
 #SBATCH --nodes=1
@@ -12,7 +12,7 @@
 # (SMT enabled, see comment below)
 #SBATCH --output=logs/adapt_%j.out
 #SBATCH --error=logs/adapt_%j.err
-#SBATCH --partition=booster
+#SBATCH --partition=develbooster
 #SBATCH --gres=gpu:4
 # For gpus and and booster partition
 

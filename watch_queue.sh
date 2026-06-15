@@ -1,5 +1,5 @@
 #! /usr/bin/bash
 
-id=$(squeue | awk -F " " '{print $1}' | tail -n 1)
+id=$(squeue | grep toulouse | awk -F " " '{print $1}')
 
-cat logs/adapt_${1}_${id}.${2} | tail -n 20
+cat logs/adapt_${id}.${1} | tail -n 20
