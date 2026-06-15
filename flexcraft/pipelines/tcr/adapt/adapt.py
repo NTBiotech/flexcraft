@@ -525,13 +525,6 @@ class ADAPT:
             len(design["aa"])
         ))
         af_input = AFInput.from_data(design)
-        if templates is None:
-            off_target_template = True
-        if off_target_template:
-            if is_target is None:
-                print("No is_target input. Not adding template!")
-            else:
-                af_input = af_input.add_template(design, where=~is_target)
         if self.get_templates(design):
             for template, lock in zip(self.template_structures, self.template_locks):
                 lock.acquire()
@@ -541,7 +534,14 @@ class ADAPT:
             for t in templates:
                 t, _ = self.pad_design(t)
                 af_input = af_input.add_template(t)
-
+        # fallback to off_target template in case no others available
+        elif templates is None:
+            off_target_template = True
+        if off_target_template:
+            if is_target is None:
+                print("No is_target input. Not adding template!")
+            else:
+                af_input = af_input.add_template(design, where=~is_target)
         af_result = self.af_infer(af_input=af_input)
         design, is_target = self.rm_pad(af_result.to_data(), pad_length, is_target)
         self.set_templates = False
