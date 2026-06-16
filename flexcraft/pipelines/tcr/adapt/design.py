@@ -8,13 +8,26 @@ from pathlib import Path
 import json
 import argparse
 
+def _bool(value):
+    if value.lower() == "true":
+        return True
+    if value.lower() == "false":
+        return False
+    raise ValueError(f"{value} not a supported bool format!")
+
+def _str_or_None(value):
+    if value.lower()=="none":
+        return None
+    else:
+        return value
+
 parser = argparse.ArgumentParser(
     usage="Script for running design trials using the ADAPT class."
 )
 
-parser.add_argument("--peptide", nargs="*", default=[],)
-parser.add_argument("--mhc_allele", nargs="*", default=[],)
-parser.add_argument("--binder", nargs="*", default=[],)
+parser.add_argument("--peptide", nargs="*", default=None,)
+parser.add_argument("--mhc_allele", nargs="*", default=None,)
+parser.add_argument("--binder", nargs="*", default=None,)
 parser.add_argument("--cdrs", type=str, default=None)
 parser.add_argument("--ab", action="store_true")
 parser.add_argument("--out_dir", type=Path, default=Path("."))
@@ -32,19 +45,21 @@ parser.add_argument("--mhc_class", type=int, default=None)
 
 parser.add_argument("--config", default="./config.json",)
 
-parser.add_argument("--prepared", action="store_true", help="Wether input binders are prepared or need to be constructed.")
-parser.add_argument("--prepare_only", action="store_true", help="If True, only scaffolds are prepared in out_dir.")
+parser.add_argument("--prepared", type=_bool, help="Wether input binders are prepared or need to be constructed.")
+parser.add_argument("--prepare_only", type=_bool, help="If True, only scaffolds are prepared in out_dir.")
 
 
 # parse arguments
 args = parser.parse_args()
 config = json.load(open(args.config, "r"))
-mhcs = list(args.mhc_allele)
-peptides = list(args.peptide)
-binders = list(args.binder)
 out_dir = args.out_dir
 templates = args.templates
 template_mhc_class = args.template_mhc_class
+
+# make "None" None
+mhcs = [_str_or_None(x) for x in list(args.mhc_allele)]
+peptides = [_str_or_None(x) for x in list(args.peptide)]
+binders = [_str_or_None(x) for x in list(args.binder)]
 
 # unpack binders if dir
 _binders = []
@@ -55,9 +70,20 @@ for binder in binders:
         _binders.append(binder)
 binders = _binders
 
+# extend other components to longest member
+longest = max([len(x) for x in [mhcs, peptides]])
+def _expand(x, l):
+    if len(x) == 1:
+        return x*l
+    return x
+mhcs = _expand(mhcs, longest)
+peptides = _expand(peptides, longest)
+
+
 # cdr generator
 cdrs_gen = cdr_parser(args.cdrs, random=args.random_cdr, cdr_length=args.cdr_length, patience=100)
 
+# update config 
 if not args.mhc_class is None:
     config.update(mhc_class = args.mhc_class)
 if not args.out_dir == Path(".") or "out_dir" not in config.keys():
@@ -88,8 +114,9 @@ for mhc, peptide in zip(mhcs, peptides):
     
     get_structure = False
     if args.prepared:
-        peptide=None
-        mhc_seq=None
+        peptide = None
+        mhc_seq = None
+        cdrs_gen = lambda: None
     else:
         # table with the right columns
         if mhc.endswith(".csv"):
@@ -114,7 +141,8 @@ for mhc, peptide in zip(mhcs, peptides):
         # pdb file
         elif mhc.endswith(".pdb"):
             mhc_seq = clean_chothia(mhc)
-        
+        else:
+            mhc_seq = mhc
 
     for binder in binders:
         print(f"Using Binder {binder}...")
@@ -147,7 +175,6 @@ for mhc, peptide in zip(mhcs, peptides):
                 presenter=mhc_seq,
                 antigen=peptide,
                 cdrs=cdrs,
-                replace_antigen=True,
                 get_structure=get_structure
             )
             if args.prepare_only:

@@ -15,11 +15,17 @@ out_parent="${root}/data/adapt"
 run_config="${test_dir}/run_config_jw.sh"
 tmp_config="${test_dir}/run_config_jw_temp.sh"
 rm $tmp_config
-construct_config="${test_dir}/construct_adapt_config.json"
-
+cp $run_config $tmp_config
 
 # prepare constructs using boltz with msa
+construct_config="${test_dir}/construct_adapt_config.json"
 prepared_dir="${out_parent}/adapt_tuning_prepared"
+cat <<EOF >>$tmp_config
+OUT_DIR=${prepared_dir}
+PREPARE=True
+PREPARED=False
+EOF
+
 sbatch <<EOF
 #! /usr/bin/bash
 #SBATCH --job-name=prepare_adapt_tuning
@@ -50,13 +56,7 @@ source "$CONDA_PATH/bin/activate"
 conda activate "$CONDA_ENV"
 
 cd ${root}
-OUT_DIR=${prepared_dir} ./flexcraft/pipelines/tcr/adapt/prepare.sh $construct_config $run_config
-EOF
-# overwrite BINDERS in run_config to prepared dir
-head -n 20 $run_config > $tmp_config
-
-cat <<EOF >> $tmp_config
-BINDERS=${prepared_dir}
+./flexcraft/pipelines/tcr/adapt/full_run_jw.sh $construct_config $tmp_config
 EOF
 
 # wait till job finished
@@ -64,6 +64,15 @@ while (($(squeue|grep toulouse|wc -l) >= 1))
 do
 sleep 10
 done
+
+# overwrite BINDERS in run_config to prepared dir
+cat <<EOF >> $tmp_config
+BINDERS=${prepared_dir}
+PREPARED=True
+PREPARE=False
+N_DESIGN=1
+EOF
+
 
 
 for c in ${test_dir}/adapt_config_*.json; do
@@ -73,7 +82,10 @@ sleep 10
 done
 echo $c
 c_name=$(basename $c ".json")
-cat <<EOF
+cat <<EOF >>$tmp_config
+OUT_DIR="${out_parent}/adapt_tuning_${c_name}"
+EOF
+sbatch <<EOF
 #! /usr/bin/bash
 #SBATCH --job-name=${c_name}_adapt_tuning
 #SBATCH --time=02:00:00
@@ -105,8 +117,10 @@ conda activate "$CONDA_ENV"
 cd ${root}
 
 
-OUT_DIR="${out_parent}/adapt_tuning_${c_name}" ./flexcraft/pipelines/tcr/adapt/full_run_jw.sh $c $tmp_config
+./flexcraft/pipelines/tcr/adapt/full_run_jw.sh $c $tmp_config
 EOF
 done
+# wait 10s to overwrite the config
+sleep 10
 
 rm $tmp_config

@@ -65,8 +65,23 @@
 # "chain_cache_len":450
 # }
 
-
 current_time=$(date +"%Y-%m-%d_%H:%M:%S")
+
+# default run config
+BINDERS="." # search local for pdb files
+ADAPT_CONFIG="./adapt_config.json"
+PEPTIDE=None
+MHC_ALLELE=None
+CDR_FILE="./cdrs.csv"
+OUT_DIR="./adapt_full_run_${current_time}"
+N_DESIGN=2
+PREPARED=False
+PREPARE=False
+N_REFINEMENT=20
+N_TASKS=1
+FAMILY_LIMIT=10
+FULL_LIMIT=5
+
 
 ADAPT_CONFIG=$1
 RUN_CONFIG=$2
@@ -80,7 +95,21 @@ pwd
 
 # launch designers for all binders
 # define array b as binder list
+if [ -f "$BINDERS" ]; then
 IFS=$'\t' read -ra b <  "$BINDERS"
+
+elif [ -d "$BINDERS" ]; then
+# remove cleaned files if present
+rm "$BINDERS/*_clean.pdb"
+b=()
+for f in "$BINDERS"/*.pdb; do
+echo $f
+b+=($f)
+done
+else
+    echo "$BINDERS not supported as input for BINDERS!"
+    exit 1
+fi
 n_binders=${#b[@]}
 
 binders_per_task=$(($n_binders / $N_TASKS))
@@ -103,10 +132,10 @@ for slice in $(seq 0 $binders_per_task $(($n_binders-1))); do
     echo "assigning slice ${slice} to GPU ${gpu}"
     
     if [ "$TYPE" = "ab" ]; then
-    CUDA_VISIBLE_DEVICES=$gpu python ./flexcraft/pipelines/tcr/adapt/design.py --config $ADAPT_CONFIG --peptide $PEPTIDE --mhc_allele $MHC_ALLELE --binder $binders --cdrs $CDR_FILE --ab --out_dir $OUT_DIR --random_cdr --design_steps $N_DESIGN &
+    CUDA_VISIBLE_DEVICES=$gpu python ./flexcraft/pipelines/tcr/adapt/design.py --config $ADAPT_CONFIG --peptide $PEPTIDE --mhc_allele $MHC_ALLELE --binder $binders --cdrs $CDR_FILE --ab --out_dir $OUT_DIR --random_cdr --design_steps $N_DESIGN --prepared $PREPARED --prepare_only $PREPARE&
     fi
     if [ "$TYPE" = "tcr" ]; then
-    CUDA_VISIBLE_DEVICES=$gpu python ./flexcraft/pipelines/tcr/adapt/design.py --config $ADAPT_CONFIG --peptide $PEPTIDE --mhc_allele $MHC_ALLELE --binder $binders --cdrs $CDR_FILE --out_dir $OUT_DIR --random_cdr --design_steps $N_DESIGN &
+    CUDA_VISIBLE_DEVICES=$gpu python ./flexcraft/pipelines/tcr/adapt/design.py --config $ADAPT_CONFIG --peptide $PEPTIDE --mhc_allele $MHC_ALLELE --binder $binders --cdrs $CDR_FILE --out_dir $OUT_DIR --random_cdr --design_steps $N_DESIGN --prepared $PREPARED --prepare_only $PREPARE&
     fi
     pids+=("$!")
     i=$(( i + 1 ))
@@ -115,6 +144,10 @@ done
 for pid in ${pids[*]}; do
     wait $pid
 done
+
+if [ "$PREPARE" = "True" ]; then
+exit 0
+fi
 
 pids=()
 i=0

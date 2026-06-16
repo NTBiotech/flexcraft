@@ -98,10 +98,10 @@ for slice in $(seq 0 $binders_per_task $(($n_binders-1))); do
     echo "assigning slice ${slice} to GPU ${gpu}"
     
     if [ "$TYPE" = "ab" ]; then
-    CUDA_VISIBLE_DEVICES=$gpu python ./flexcraft/pipelines/tcr/adapt/design.py --config $ADAPT_CONFIG --peptide $PEPTIDE --mhc_allele $MHC_ALLELE --binder $binders --cdrs $CDR_FILE --ab --out_dir $OUT_DIR --random_cdr --design_steps $N_DESIGN --prepare_only &
+    CUDA_VISIBLE_DEVICES=$gpu python ./flexcraft/pipelines/tcr/adapt/design.py --config $ADAPT_CONFIG --peptide $PEPTIDE --mhc_allele $MHC_ALLELE --binder $binders --cdrs $CDR_FILE --ab --out_dir $OUT_DIR --random_cdr --design_steps $N_DESIGN --prepare_only True &
     fi
     if [ "$TYPE" = "tcr" ]; then
-    CUDA_VISIBLE_DEVICES=$gpu python ./flexcraft/pipelines/tcr/adapt/design.py --config $ADAPT_CONFIG --peptide $PEPTIDE --mhc_allele $MHC_ALLELE --binder $binders --cdrs $CDR_FILE --out_dir $OUT_DIR --random_cdr --design_steps $N_DESIGN --prepare_only &
+    CUDA_VISIBLE_DEVICES=$gpu python ./flexcraft/pipelines/tcr/adapt/design.py --config $ADAPT_CONFIG --peptide $PEPTIDE --mhc_allele $MHC_ALLELE --binder $binders --cdrs $CDR_FILE --out_dir $OUT_DIR --random_cdr --design_steps $N_DESIGN --prepare_only True &
     fi
     pids+=("$!")
     i=$(( i + 1 ))

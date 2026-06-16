@@ -260,6 +260,7 @@ class ADAPT:
             self.boltz_msa = config["msa"]
 
             if config["predictor"] is None:
+                print("Compiling Boltz!")
                 self.boltz_model = Joltz2(model=self.boltz_model_name+".ckpt", cache=self.boltz_parameter_path)
                 self._boltz_evaluator, self.boltz_params = self.boltz_model.evaluator(
                     num_recycle=self.boltz_num_recycle,
@@ -409,6 +410,7 @@ class ADAPT:
         self.pmpnn_n_per_target = config["n_per_target"]
 
         if self.pmpnn is None:
+            print("Compiling PMPNN!")
             self.pmpnn = jit(make_pmpnn(self.pmpnn_parameter_path, eps=0.05))
 
         self.pmpnn_transform = lambda center: transform_logits((
@@ -480,6 +482,7 @@ class ADAPT:
                 self.af2_multimer = "multimer" in self.af2_model_name
             self.af2_config = model_config(self.af2_model_name)
             self.af2_config.model.global_config.use_dgram = False
+            print("Compiling AF2!")
             self.af2_model = jit(make_predict(
                 make_af2(self.af2_config, use_multimer=self.af2_multimer),
                 num_recycle=self.af2_num_recycle))
@@ -525,17 +528,20 @@ class ADAPT:
             len(design["aa"])
         ))
         af_input = AFInput.from_data(design)
+        # read in manual input templates
+        if not templates is None:
+            for t in templates:
+                t, _ = self.pad_design(t)
+                af_input = af_input.add_template(t)
+        # check if tcrdock templates available
         if self.get_templates(design):
             for template, lock in zip(self.template_structures, self.template_locks):
                 lock.acquire()
                 template, _ = self.pad_design(template.copy())
                 af_input = af_input.add_template(template, where=~is_target)
-        if not templates is None:
-            for t in templates:
-                t, _ = self.pad_design(t)
-                af_input = af_input.add_template(t)
         # fallback to off_target template in case no others available
         elif templates is None:
+            print("Falling back to off-target input as template!")
             off_target_template = True
         if off_target_template:
             if is_target is None:
@@ -545,7 +551,7 @@ class ADAPT:
         af_result = self.af_infer(af_input=af_input)
         design, is_target = self.rm_pad(af_result.to_data(), pad_length, is_target)
         self.set_templates = False
-        # release eventual locks
+        # release eventual locks on tcr_template files
         for lock in self.template_locks:
             lock.release()
         if evaluate:
@@ -826,14 +832,15 @@ class ADAPT:
             design = self.af_docking_step(input_design=design, is_target=target_mask)
 
         print_dd(design, "Docked")
+
         # redesign step: redesign the CDR positions
-        
         designs = self.design_step(input_design=design, target_mask=target_mask)
+
         structures = []
         scores = []
         print_dd(designs[0], "Redesigned")
         templates = None
-        if self.boltz_docking:
+        if self.boltz_docking and len(boltz_designs)>0:
             templates = boltz_designs
         for n,design in enumerate(designs):
             # redocking + evaluation step
@@ -992,7 +999,7 @@ class ADAPT:
         scores = []
         print_dd(designs[0], "Redesigned")
         templates = None
-        if self.boltz_docking:
+        if self.boltz_docking and len(boltz_designs)>0:
             templates = boltz_designs
         for n,design in enumerate(designs):
 
@@ -1419,10 +1426,9 @@ class ADAPT:
     def make_scaffold(
         self,
         receptor:DesignData|Path|str,
-        antigen:DesignData|Path|str,
+        antigen:DesignData|Path|str|None=None,
         presenter:DesignData|Path|str|None=None,
         cdrs:Dict[str,str]|None=None,
-        replace_antigen:bool=False,
         mhc_class:int=1,
         get_structure:bool=False,
         ):
@@ -1437,22 +1443,35 @@ class ADAPT:
         
         # load all constructs
         receptor = self._convert_input_peptide(receptor)
-
-        # remove non- (mhc or tcr/ab) chains
-        receptor = self.number_anarci(receptor, trim=False)
-        receptor = receptor[(
-            receptor["chain_index"][:, None]==self.tcr_chain_index[None,:]).any(axis=1)]
-        print_dd(receptor,"Receptor(peptide removed)")
-
         antigen = self._convert_input_peptide(antigen)
         presenter = self._convert_input_peptide(presenter)
+        self.mhc_class = mhc_class
+
+
         if not presenter is None:
+            # remove all non tcr chains
+            receptor = self.number_anarci(receptor, trim=False)
+            receptor = receptor[(
+                receptor["chain_index"][:, None]==self.tcr_chain_index[None,:]).any(axis=1)]
+            print_dd(receptor,"Receptor(peptide removed)")
+            # remove all tcr chains
             if len(np.unique(presenter["chain_index"]))>2:
                 presenter = self.number_anarci(presenter, trim=False)
                 presenter = presenter[(
-                    presenter["chain_index"][:, None]==self.mhc_chain_index[None,:]
+                    presenter["chain_index"][:, None]!=self.tcr_chain_index[None,:]
                 ).any(axis=1)]
-        self.mhc_class = mhc_class
+                if not antigen is None:
+                    # remove antigen chain
+                    presenter = presenter[(
+                        presenter["chain_index"][:, None]==np.concatenate(self.tcr_chain_index, self.mhc_chain_index)[None,:]
+                        ).any(axis=1)]
+        elif not antigen is None:
+            # if antigen not None and presenter None, remove antigen from receptor
+            receptor = self.number_anarci(receptor, trim=False)
+            receptor = receptor[(
+                receptor["chain_index"][:, None]==np.concatenate(self.tcr_chain_index, self.mhc_chain_index)[None,:]).any(axis=1)]
+            print_dd(receptor,"Receptor(peptide removed)")
+
         scaffold = DesignData.concatenate(
             [d for d in [receptor, antigen, presenter] if not d is None],
             sep_chains=True, sep_batch=False
