@@ -5,29 +5,33 @@ PROJECT_NAME="hai_1252"             # project id on cluster
 REPO_NAME="flexcraft"
 jutil env activate -p "$PROJECT_NAME"
 PROJECT_DIR="$PROJECT"   # absolute path on cluster
-CONC_LIMIT=4
+N_RUNS=2
+current_time=$(date +"%Y-%m-%d_%H:%M:%S")
 
 root="${PROJECT_DIR}/toulouse1/flexcraft"
 echo "root: ${root}"
-test_dir="${root}/tests/test_configs"
-out_parent="${root}/data/adapt"
+config_dir="${root}/tests/run_configs"
+out_parent="${root}/data/adapt/full_run"
+mkdir "${out_parent}"
 
-run_config="${test_dir}/run_config_jw.sh"
-tmp_config="${test_dir}/run_config_jw_temp.sh"
+adapt_config="${config_dir}/adapt_config.json"
+run_config="${config_dir}/run_config_jw.sh"
+tmp_config="${config_dir}/run_config_jw_temp.sh"
 rm $tmp_config
 cp $run_config $tmp_config
 
 # prepare constructs using boltz with msa
-construct_config="${test_dir}/construct_adapt_config.json"
-prepared_dir="${out_parent}/adapt_tuning_prepared"
+construct_config="${config_dir}/construct_adapt_full_run.json"
+prepared_dir="${out_parent}/${current_time}_adapt_full_run_prepared"
+
 cat <<EOF >>$tmp_config
 PREPARE=True
 PREPARED=False
+OUT_DIR=${prepared_dir}
 EOF
-
-cat <<EOF
+sbatch <<EOF
 #! /usr/bin/bash
-#SBATCH --job-name=prepare_adapt_tuning
+#SBATCH --job-name=prepare_adapt_tuning_${current_time}
 #SBATCH --time=02:00:00
 #SBATCH --account=${PROJECT_NAME}
 # budget account where contingent is taken from
@@ -38,8 +42,8 @@ cat <<EOF
 #SBATCH --ntasks-per-node=4
 # if keyword omitted: Max. 96 tasks per node
 # (SMT enabled, see comment below)
-#SBATCH --output=logs/adapt_tuning_prepare_%j.out
-#SBATCH --error=logs/adapt_tuning_prepare_%j.err
+#SBATCH --output=logs/${current_time}_adapt_tuning_prepare_%j.out
+#SBATCH --error=logs/${current_time}_adapt_tuning_prepare_%j.err
 #SBATCH --partition=develbooster
 #SBATCH --gres=gpu:4
 # For gpus and and booster partition
@@ -55,14 +59,14 @@ source "$CONDA_PATH/bin/activate"
 conda activate "$CONDA_ENV"
 
 cd ${root}
-OUT_DIR=${prepared_dir} ./flexcraft/pipelines/tcr/adapt/full_run_jw.sh $construct_config $tmp_config
+./flexcraft/pipelines/tcr/adapt/full_run_jw.sh $construct_config $tmp_config
 EOF
 
 # wait till job finished
-#while (($(squeue|grep toulouse|wc -l) >= 1))
-#do
-#sleep 10
-#done
+while (($(squeue|grep toulouse|wc -l) >= 1))
+do
+sleep 10
+done
 
 # overwrite BINDERS in run_config to prepared dir
 cat <<EOF >> $tmp_config
@@ -70,21 +74,14 @@ BINDERS=${prepared_dir}
 PREPARED=True
 PREPARE=False
 N_DESIGN=1
+OUT_DIR="${out_parent}/${current_time}_adapt_full_run"
 EOF
 
-
-
-for c in ${test_dir}/adapt_config_*.json; do
-while (($(squeue|grep toulouse|wc -l) >= $CONC_LIMIT))
-do
-sleep 10
-done
-echo $c
-c_name=$(basename $c ".json")
+for i in $(seq 1 $N_RUNS); do
 sbatch <<EOF
 #! /usr/bin/bash
-#SBATCH --job-name=${c_name}_adapt_tuning
-#SBATCH --time=02:00:00
+#SBATCH --job-name=${current_time}_adapt_run_${i}
+#SBATCH --time=24:00:00
 #SBATCH --account=${PROJECT_NAME}
 # budget account where contingent is taken from
 #SBATCH --nodes=1
@@ -94,9 +91,9 @@ sbatch <<EOF
 #SBATCH --ntasks-per-node=4
 # if keyword omitted: Max. 96 tasks per node
 # (SMT enabled, see comment below)
-#SBATCH --output=logs/adapt_tuning_${c_name}_%j.out
-#SBATCH --error=logs/adapt_tuning_${c_name}_%j.err
-#SBATCH --partition=develbooster
+#SBATCH --output=logs/${current_time}_${i}_adapt_run_%j.out
+#SBATCH --error=logs/${current_time}_${i}_adapt_run_%j.err
+#SBATCH --partition=booster
 #SBATCH --gres=gpu:4
 # For gpus and and booster partition
 
@@ -113,10 +110,12 @@ conda activate "$CONDA_ENV"
 cd ${root}
 
 
-OUT_DIR="${out_parent}/adapt_tuning_${c_name}" ./flexcraft/pipelines/tcr/adapt/full_run_jw.sh $c $tmp_config
+./flexcraft/pipelines/tcr/adapt/full_run_jw.sh $adapt_config $tmp_config
 EOF
-# wait 10s to overwrite the config
+# reduce concurrent reading by 10s offset
 sleep 10
+
 done
+
 
 #rm $tmp_config

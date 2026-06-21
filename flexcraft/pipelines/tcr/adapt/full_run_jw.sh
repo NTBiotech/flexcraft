@@ -68,19 +68,19 @@
 current_time=$(date +"%Y-%m-%d_%H:%M:%S")
 
 # default run config
-BINDERS="." # search local for pdb files
-ADAPT_CONFIG="./adapt_config.json"
-PEPTIDE=None
-MHC_ALLELE=None
-CDR_FILE="./cdrs.csv"
-OUT_DIR="./adapt_full_run_${current_time}"
-N_DESIGN=2
-PREPARED=False
-PREPARE=False
-N_REFINEMENT=20
-N_TASKS=1
-FAMILY_LIMIT=10
-FULL_LIMIT=5
+#BINDERS="." # search local for pdb files
+#ADAPT_CONFIG="./adapt_config.json"
+#PEPTIDE=None
+#MHC_ALLELE=None
+#CDR_FILE="./cdrs.csv"
+#OUT_DIR="./adapt_full_run_${current_time}"
+#N_DESIGN=2
+#PREPARED=False
+#PREPARE=False
+#N_REFINEMENT=20
+#N_TASKS=1
+#FAMILY_LIMIT=10
+#FULL_LIMIT=5
 
 
 ADAPT_CONFIG=$1
@@ -100,7 +100,7 @@ IFS=$'\t' read -ra b <  "$BINDERS"
 
 elif [ -d "$BINDERS" ]; then
 # remove cleaned files if present
-rm "$BINDERS/*_clean.pdb"
+rm "$BINDERS"/*_clean.pdb
 b=()
 for f in "$BINDERS"/*.pdb; do
 echo $f

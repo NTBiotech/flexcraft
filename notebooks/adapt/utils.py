@@ -9,6 +9,15 @@ def read_json(p):
         d = json.load(rf)
     return dict(d)
 
+def apply_to_all(func, inputs, *covariates):
+    res = []
+    for t in zip(inputs, *covariates):
+        try:
+            res.append(func(*t))
+        except Exception as ex:
+            print("Encountered: ", ex)
+            res.append(None)
+    return res
 
 def process_scores(df, intervall = 100):
     if len(df) == 0:
@@ -29,12 +38,16 @@ def process_scores(df, intervall = 100):
     df["binned_time"] = df["time"].map(lambda x: i[bins>x][0]*intervall)
     return df
 
-def apply_to_all(func, inputs, *covariates):
-    res = []
-    for t in zip(inputs, *covariates):
-        try:
-            res.append(func(*t))
-        except Exception as ex:
-            print("Encountered: ", ex)
-            res.append(None)
-    return res
+def in_pool_time(df, max_time=None, bins=1000):
+    df = df.copy()
+    time_cols=[c for c in df.columns if "time" in c.lower()]
+    if max_time is None:
+        max_time = df[time_cols].max(axis=None)
+    df[time_cols] = df[time_cols].fillna(max_time)
+
+    t = np.array([(max_time/bins) * n for n in range(bins)])
+    mask = (df["time"].to_numpy()[None,:]<t[:,None])&(df["out_time"].to_numpy()[None,:]>t[:,None])
+    return t,[df["score"][m].mean() for m in mask]
+
+def get_label(config):
+    return f'boltz:{config["boltz_config"]["docking"]}\nmsa:{config["boltz_config"]["msa"]}\ntemplates:{not config["templates"]is None}'
