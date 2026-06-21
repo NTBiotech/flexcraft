@@ -243,7 +243,6 @@ def number_anarci(
     '''
     from flexcraft.sequence.aa_codes import AF2_CODE, decode
     import anarci
-    import jax.numpy as jnp
     if code is None:
         code = AF2_CODE
     params = {"tcr_chain_index":np.array([None,None]),
@@ -377,3 +376,37 @@ def pdb_to_cif(in_path:str, out_path=None):
     doc = structure.make_mmcif_block()
     doc.write_file(out_path)
     return out_path
+
+def pad_design(
+    chain_length:int,
+    input_design,
+    covariates,
+    ):
+    '''
+    Pad the design to conserve AF input length in order to avoid recompilation.
+    Covariates are padded with same length as input_design with zeros
+    '''
+    from flexcraft.data.data import DesignData
+    pad_length = chain_length-len(input_design["aa"])
+    if pad_length==0:
+        return input_design, pad_length, *covariates
+    if pad_length<0:
+        print(f"Design with length {len(input_design['aa'])} exceeds chain_cache_len {chain_length}!\nSkipping padding step.")
+        return input_design, pad_length, *covariates
+    print(f"Padding design by {pad_length}...")
+    atom_format = input_design["atom_mask"].shape[1]  # pyright: ignore[reportAttributeAccessIssue]
+    chain_index = np.max(input_design["chain_index"])+1  # pyright: ignore[reportArgumentType]
+    input_design = DesignData.concatenate(
+        [input_design, DesignData.from_length(pad_length).update(
+            aa=np.full((pad_length,), 7, dtype=np.int32),
+            mask=np.zeros((pad_length,), dtype=np.bool_),
+            chain_index=np.full((pad_length,), chain_index, dtype=np.int32),
+            atom_positions=np.zeros((pad_length, atom_format, 3), dtype=np.float32),
+            atom_mask=np.zeros((pad_length, atom_format), dtype=np.bool_),
+            )],
+        sep_chains=False, sep_batch=False
+    )
+    if covariates:
+        covariates = [np.concatenate((c.copy(), np.zeros((pad_length,), dtype=c.dtype)), axis=0) for c in covariates]
+        return input_design, *covariates
+    return input_design

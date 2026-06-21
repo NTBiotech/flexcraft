@@ -203,6 +203,7 @@ class ADAPT:
         self.templates = []
         self.template_mhc_class = []
         self.template_locks = []
+        self.set_templates=False
         # expand template directories and mhc classes
         if not templates is None and not template_mhc_class is None:
             if isinstance(templates, (str, Path)):
@@ -791,19 +792,20 @@ class ADAPT:
         print(
             f"\n!---Design Trial for {scaffold_name}---!\n",
         )
-        file_name = f"{scaffold_name}_A_0.pdb"
+        file_name = f"{scaffold_name}_0_0.pdb"
         n = 0
-        s = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
         while (self.out_dir/file_name).exists():
+            file_name = f"{scaffold_name}_{n}_0.pdb"
             n += 1
-            file_name = f"{scaffold_name}_{s[n]}_0.pdb"
             #design.save_pdb(f"{(self.out_dir/file_name).with_suffix('')}_input.pdb") checks out
-
-
+        scaffold_name = file_name[:-6]
         # filter ids
         for cdr in cdrs:
             if cdr not in self.imgt_mapper.keys():
                 raise KeyError(f"Invalid cdr id {cdr}! Choose one of {[f'{k}, ' for k in self.imgt_mapper.keys()]}.")
+
+        # number and trim design
+        design = self.number_anarci(design, trim=True)
 
         # process input
         print_dd(design, "Input")
@@ -1034,7 +1036,8 @@ class ADAPT:
             }
 
         # compare to existing
-        print("Replacing ",self.compare(file_name,row,family_limit=family_limit,full_limit=full_limit,))
+        #print("Replacing ",self.compare(file_name,row,family_limit=family_limit,full_limit=full_limit,))
+        self.compare(file_name,row,family_limit=family_limit,full_limit=full_limit,)
 
 
     def compare(
@@ -1059,29 +1062,44 @@ class ADAPT:
         with self.lock:
             self.append_scores(specs, str(file_name))
             scores = self.get_scores()
-            scores_sub = scores[scores["in_pool"]]
-            family:pd.DataFrame = scores_sub.loc[scores_sub["scaffold"]==specs["scaffold"]]
-            if len(family.loc[family["in_pool"]]) > family_limit:
-                # if family limit reached, drop least score
-                out_name = family.loc[family["in_pool"]].sort_values("score", ascending=False).iloc[0].name
-            elif scores_sub["in_pool"].sum() < full_limit:
+            for family in np.unique(scores["scaffold"]):
+                mask = scores["scaffold"]==family
+                if (mask).sum()<family_limit:
+                    # if not enough designs for family limit skip
+                    continue
+                else:
+                    # if over family limit set score threshold
+                    min_score = scores.loc[mask].sort_values("score", ascending=True).iloc[family_limit]["score"]
+                    scores.loc[mask, "in_pool"] = scores.loc[mask, "score"].map(lambda x: x>min_score)
+            # check total limit
+            if len(scores) < full_limit:
                 # if limit not reached dont drop any
                 return None
             else:
-                # remove least performing
-                out_name = scores_sub.sort_values("score", ascending=False).iloc[0].name
-
-            scores.loc[out_name, "in_pool"] = False
-            scores.loc[out_name, "out_time"] = datetime.now().strftime("%Y-%d-%b_%H:%M:%S")
-            print(f"Removing worst design {out_name} and adding {specs}.")
-            if delete_file:
-                if not isinstance(file_name, Path):
-                    out_name = Path(out_name)
-                if out_name.parent != self.out_dir:
-                    out_name = self.out_dir/out_name
-                out_name.unlink()
+                min_score = scores.sort_values("score", ascending=True).iloc[full_limit]["score"]
+                scores["in_pool"] = scores["score"].map(lambda x: x>min_score)
+            #scores_sub = scores.loc[scores["in_pool"]]
+            #family:pd.DataFrame = scores_sub.loc[scores_sub["scaffold"]==specs["scaffold"]]
+            #if len(family.loc[family["in_pool"]]) > family_limit:
+            #    # if family limit reached, drop highest score
+            #    out_name = family.loc[family["in_pool"]].sort_values("score", ascending=False).iloc[0].name
+            #elif scores["in_pool"].sum() < full_limit:
+            #    # if limit not reached dont drop any
+            #    return None
+            #else:
+            #    # remove least performing
+            #    out_name = scores_sub.sort_values("score", ascending=False).iloc[0].name
+#
+            #scores.loc[out_name, "in_pool"] = False
+            #scores.loc[out_name, "out_time"] = datetime.now().strftime("%Y-%d-%b_%H:%M:%S")
+            #print(f"Removing worst design {out_name} and adding {specs}.")
+            #if delete_file:
+            #    if not isinstance(file_name, Path):
+            #        out_name = Path(out_name)
+            #    if out_name.parent != self.out_dir:
+            #        out_name = self.out_dir/out_name
+            #    out_name.unlink()
             self.write_scores(scores)
-        return out_name
 
 
     def mutate_cdrs(
@@ -1535,6 +1553,8 @@ class ADAPT:
         self.templates = templates
         self.template_mhc_class = template_mhc_class
         self.set_templates = False
+        self.template_paths = []
+        self.template_locks = []
         return tcr_poses
 
     def get_templates(
@@ -1545,13 +1565,17 @@ class ADAPT:
         if self.set_templates:
             return True
         
-        if not self.tcr_poses is None:
+        elif not self.tcr_poses is None:
             print("Setting templates!")
             from flexcraft.pipelines.tcr.tcrdock import set_tcr_pose
             params = {
                 "mhc_chain_index":self.mhc_chain_index,
                 "tcr_chain_index":self.tcr_chain_index
             }
+            # clear previous templates
+            for p in self.template_paths:
+                if Path(p).exists():
+                    Path(p).unlink()
             self.template_structures = [set_tcr_pose(design.copy(), target_pose=pose, mhc_class=self.mhc_class, blast_kwargs=self.blast_kwargs, params=params) for pose in self.tcr_poses]
             print("template poses: ", self.tcr_poses)
             self.set_templates = True
@@ -1566,6 +1590,7 @@ class ADAPT:
                     p = self.boltz_input_dir/f"template_{n}_{i}.pdb"
                     while p.exists():
                         p = self.boltz_input_dir/f"template_{n}_{i}.pdb"
+                        i+=1
                     t.save_pdb(p)
                     self.template_paths.append(p.__str__())
                     self.template_locks.append(FileLock(p.with_suffix(".lock")))

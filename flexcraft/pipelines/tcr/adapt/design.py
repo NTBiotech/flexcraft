@@ -65,8 +65,8 @@ binders = [_str_or_None(x) for x in list(args.binder)]
 _binders = []
 for binder in binders:
     if Path(binder).is_dir():
-        _binders.extend([p for p in Path(binder).glob("*.pdb")])
-    else:
+        _binders.extend([p for p in Path(binder).glob("*.pdb") if not "_clean" in p.__str__()])
+    elif not "_clean" in binder.__str__():
         _binders.append(binder)
 binders = _binders
 
@@ -95,7 +95,7 @@ if not templates is None:
 
 if (len(mhcs)>1) and (len(peptides)>1):
     # make parent for each combi
-    out_dir = config.get("out_dir", config.get("op_dir", ".")+f"adapt_design_{datetime.now().strftime('%Y-%d-%b_%H:%M:%S')}/")
+    out_dir = Path(config.get("out_dir", config.get("op_dir", ".")+f"adapt_design_{datetime.now().strftime('%Y-%d-%b_%H:%M:%S')}/"))
     if not out_dir.exists():
         out_dir.mkdir()
 
@@ -116,7 +116,6 @@ for mhc, peptide in zip(mhcs, peptides):
     if args.prepared:
         peptide = None
         mhc_seq = None
-        cdrs_gen = lambda: None
     else:
         # table with the right columns
         if mhc.endswith(".csv"):
@@ -170,21 +169,25 @@ for mhc, peptide in zip(mhcs, peptides):
         for n in range(args.design_steps):
             print(f"\nDesign step {n}")
             cdrs = cdrs_gen()
-            scaffold, scaffold_name = adapt.make_scaffold(
-                receptor=binder_path,
-                presenter=mhc_seq,
-                antigen=peptide,
-                cdrs=cdrs,
-                get_structure=get_structure
-            )
-            if args.prepare_only:
-                scaffold.save_pdb((config["out_dir"]/scaffold_name).with_suffix(".pdb"))
-            else:
-                adapt.design_trial(
-                    design=scaffold,
-                    scaffold_name=scaffold_name,
-                    cdrs=list(cdrs.keys())
+            if not args.prepared:
+                scaffold, scaffold_name = adapt.make_scaffold(
+                    receptor=binder_path,
+                    presenter=mhc_seq,
+                    antigen=peptide,
+                    cdrs=None if args.prepared else cdrs,
+                    get_structure=get_structure
                 )
+                if args.prepare_only:
+                    scaffold.save_pdb((config["out_dir"]/scaffold_name).with_suffix(".pdb"))
+                    continue
+            else:
+                scaffold = PDBFile(path=clean_chothia(binder)).to_data()
+                scaffold_name = Path(binder).stem
+            adapt.design_trial(
+                design=scaffold,
+                scaffold_name=scaffold_name,
+                cdrs=list(cdrs.keys())
+            )
 print(f"Finished design run!\n")
 if (len(mhcs)>1) and (len(peptides)>1):
     print("Collected results at: ",collect_results(Path(out_dir), pattern=f"**/*{adapt.name}*", save=True))
