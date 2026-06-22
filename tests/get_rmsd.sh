@@ -63,7 +63,7 @@ def get_rmsd(file1, file2):
 for n1, f1 in enumerate(files):
     for n2, f2 in enumerate(files):
         print([f1,f2], sep="->\n")
-        out_array.loc[n1,n2]=get_rmsd(f1,f2)
+        out_array.loc[f1,f2]=get_rmsd(f1,f2)
 print("saving to ",Path("$d")/"rmsd_new.csv")
 out_array.to_csv(Path("$d")/"rmsd_new.csv")
 EOF
