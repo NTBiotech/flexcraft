@@ -1,23 +1,19 @@
 C 
 CA 
 CB 
-CD1 
-CD2 
-CG 
-N 
-O 
-
-In model 1, Residue (A LEU 105) is not connected.
-C 
-CA 
-CB 
-CD1 
 CG1 
 CG2 
 N 
 O 
 
-In model 1, Residue (A ILE 106) is not connected.
+In model 1, Residue (A VAL 105) is not connected.
+C 
+CA 
+CB 
+N 
+O 
+
+In model 1, Residue (A ALA 106) is not connected.
 C 
 CA 
 CB 
@@ -27,6 +23,43 @@ O
 OG1 
 
 In model 1, Residue (A THR 107) is not connected.
+C 
+CA 
+CB 
+CD 
+CG 
+N 
+O 
+OE1 
+OE2 
+
+In model 1, Residue (A GLU 108) is not connected.
+C 
+CA 
+CB 
+N 
+O 
+
+In model 1, Residue (A ALA 109) is not connected.
+C 
+CA 
+CB 
+CD 
+CG 
+N 
+O 
+
+In model 1, Residue (A PRO 110) is not connected.
+C 
+CA 
+CB 
+CD1 
+CG1 
+CG2 
+N 
+O 
+
+In model 1, Residue (A ILE 111) is not connected.
 C 
 CA 
 CB 
@@ -40,39 +73,19 @@ N
 O 
 OH 
 
-In model 1, Residue (A TYR 108) is not connected.
+In model 1, Residue (A TYR 112) is not connected.
 C 
 CA 
 CB 
-CD1 
-CG1 
-CG2 
-N 
-O 
-
-In model 1, Residue (A ILE 109) is not connected.
-C 
-CA 
-CB 
-CD 
+CD2 
+CE1 
 CG 
 N 
+ND1 
+NE2 
 O 
-OE1 
-OE2 
 
-In model 1, Residue (A GLU 110) is not connected.
-C 
-CA 
-CB 
-CD 
-CG 
-N 
-O 
-OE1 
-OE2 
-
-In model 1, Residue (A GLU 111) is not connected.
+In model 1, Residue (A HIS 112) is not connected.
 C 
 CA 
 CB 
@@ -81,31 +94,7 @@ CG
 N 
 O 
 
-In model 1, Residue (A PRO 111) is not connected.
-C 
-CA 
-CB 
-CG2 
-N 
-O 
-OG1 
-
-In model 1, Residue (A THR 112) is not connected.
-C 
-CA 
-N 
-O 
-
-In model 1, Residue (A GLY 112) is not connected.
-C 
-CA 
-CB 
-CG2 
-N 
-O 
-OG1 
-
-In model 1, Residue (A THR 113) is not connected.
+In model 1, Residue (A PRO 113) is not connected.
 C 
 CA 
 CB 
@@ -121,79 +110,15 @@ C
 CA 
 CB 
 CD 
-CE 
-CG 
-N 
-NZ 
-O 
-
-In model 1, Residue (A LYS 115) is not connected.
-C 
-CA 
-CB 
-CD1 
-CD2 
-CG 
-N 
-O 
-
-In model 1, Residue (A LEU 116) is not connected.
-C 
-CA 
-CB 
-CD1 
-CD2 
-CE1 
-CE2 
 CG 
 CZ 
 N 
+NE 
+NH1 
+NH2 
 O 
 
-In model 1, Residue (B PHE 105) is not connected.
-C 
-CA 
-CB 
-N 
-O 
-OG 
-
-In model 1, Residue (B SER 106) is not connected.
-C 
-CA 
-CB 
-CD1 
-CD2 
-CG 
-N 
-O 
-
-In model 1, Residue (B LEU 107) is not connected.
-C 
-CA 
-CB 
-CD 
-CG 
-N 
-O 
-
-In model 1, Residue (B PRO 108) is not connected.
-C 
-CA 
-CB 
-CD1 
-CD2 
-CG 
-N 
-O 
-
-In model 1, Residue (B LEU 109) is not connected.
-C 
-CA 
-N 
-O 
-
-In model 1, Residue (B GLY 110) is not connected.
+In model 1, Residue (A ARG 115) is not connected.
 C 
 CA 
 CB 
@@ -203,14 +128,14 @@ O
 OD1 
 OD2 
 
-In model 1, Residue (B ASP 111) is not connected.
+In model 1, Residue (A ASP 116) is not connected.
 C 
 CA 
 CB 
 N 
 O 
 
-In model 1, Residue (B ALA 111) is not connected.
+In model 1, Residue (B ALA 105) is not connected.
 C 
 CA 
 CB 
@@ -218,37 +143,7 @@ N
 O 
 OG 
 
-In model 1, Residue (B SER 112) is not connected.
-C 
-CA 
-CB 
-CD1 
-CD2 
-CG 
-N 
-O 
-
-In model 1, Residue (B LEU 112) is not connected.
-C 
-CA 
-CB 
-CD 
-CG 
-N 
-O 
-OE1 
-OE2 
-
-In model 1, Residue (B GLU 113) is not connected.
-C 
-CA 
-CB 
-CD 
-CG 
-N 
-O 
-
-In model 1, Residue (B PRO 114) is not connected.
+In model 1, Residue (B SER 106) is not connected.
 C 
 CA 
 CB 
@@ -261,15 +156,80 @@ NH1
 NH2 
 O 
 
-In model 1, Residue (B ARG 115) is not connected.
+In model 1, Residue (B ARG 107) is not connected.
 C 
 CA 
 CB 
-CD1 
-CD2 
+N 
+O 
+
+In model 1, Residue (B ALA 108) is not connected.
+C 
+CA 
+N 
+O 
+
+In model 1, Residue (B GLY 109) is not connected.
+C 
+CA 
+CB 
+N 
+O 
+OG 
+
+In model 1, Residue (B SER 110) is not connected.
+C 
+CA 
+CB 
+CD 
+CG 
+CZ 
+N 
+NE 
+NH1 
+NH2 
+O 
+
+In model 1, Residue (B ARG 112) is not connected.
+C 
+CA 
+CB 
+CG2 
+N 
+O 
+OG1 
+
+In model 1, Residue (B THR 113) is not connected.
+C 
+CA 
+CB 
+CG 
+N 
+O 
+OD1 
+OD2 
+
+In model 1, Residue (B ASP 114) is not connected.
+C 
+CA 
+CB 
+CD 
 CG 
 N 
 O 
 
-In model 1, Residue (B LEU 116) is not connected.
+In model 1, Residue (B PRO 115) is not connected.
+C 
+CA 
+CB 
+CD 
+CG 
+CZ 
+N 
+NE 
+NH1 
+NH2 
+O 
+
+In model 1, Residue (B ARG 116) is not connected.
 Finished!

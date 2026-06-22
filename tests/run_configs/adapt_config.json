@@ -30,7 +30,7 @@
 "trim":true,
 "chain_cache_len":550,
 "redesign_all_cdrs":false,
-"templates":"./data/adapt/clustering_mhc1/representative/",
+"templates":null,
 "template_mhc_class":1,
 "blast_kwargs":{
     "db_files":{

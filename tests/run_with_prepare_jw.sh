@@ -5,7 +5,8 @@ PROJECT_NAME="hai_1252"             # project id on cluster
 REPO_NAME="flexcraft"
 jutil env activate -p "$PROJECT_NAME"
 PROJECT_DIR="$PROJECT"   # absolute path on cluster
-N_RUNS=2
+# deprecated for prepared, as sampling from same pool, duplicates designs
+N_RUNS=1
 current_time=$(date +"%Y-%m-%d_%H:%M:%S")
 
 root="${PROJECT_DIR}/toulouse1/flexcraft"
@@ -76,6 +77,8 @@ PREPARE=False
 N_DESIGN=1
 OUT_DIR="${out_parent}/${current_time}_adapt_full_run"
 EOF
+
+designs_per_run=
 
 for i in $(seq 1 $N_RUNS); do
 sbatch <<EOF
