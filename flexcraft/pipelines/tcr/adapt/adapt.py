@@ -1064,20 +1064,20 @@ class ADAPT:
             scores = self.get_scores()
             for family in np.unique(scores["scaffold"]):
                 mask = scores["scaffold"]==family
-                if (mask).sum()<family_limit:
+                if (mask).sum()<=family_limit:
                     # if not enough designs for family limit skip
                     continue
                 else:
                     # if over family limit set score threshold
                     min_score = scores.loc[mask].sort_values("score", ascending=True).iloc[family_limit]["score"]
-                    scores.loc[mask, "in_pool"] = scores.loc[mask, "score"].map(lambda x: x>min_score)
+                    scores.loc[mask, "in_pool"] = scores.loc[mask, "score"].map(lambda x: x<min_score)
             # check total limit
-            if len(scores) < full_limit:
+            if len(scores) <= full_limit:
                 # if limit not reached dont drop any
                 return None
             else:
                 min_score = scores.sort_values("score", ascending=True).iloc[full_limit]["score"]
-                scores["in_pool"] = scores["score"].map(lambda x: x>min_score)
+                scores["in_pool"] = scores["score"].map(lambda x: x<min_score)
             #scores_sub = scores.loc[scores["in_pool"]]
             #family:pd.DataFrame = scores_sub.loc[scores_sub["scaffold"]==specs["scaffold"]]
             #if len(family.loc[family["in_pool"]]) > family_limit:
