@@ -895,7 +895,7 @@ class ADAPT:
         if not family is None:
             scores = scores.loc[scores["scaffold"]==family]
         if index=="random":
-            row = scores.sample(1)
+            row = scores.loc[scores["in_pool"]].sample(1)
         elif index=="max":
             row = scores.sort_values("score", ascending=False).iloc[0]
         elif index=="min":
