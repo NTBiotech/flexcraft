@@ -512,7 +512,7 @@ class ADAPT:
         templates:List[DesignData]|None=None,
         off_target_template:bool=False,
         save_structure:bool|Path|str=False,
-        ) -> DesignData|Tuple[DesignData, float]:
+        ) -> DesignData|Tuple[DesignData, float, Tuple[float]]:
         '''
         Predict structures of CDRs.
         Args:
@@ -556,12 +556,12 @@ class ADAPT:
         for lock in self.template_locks:
             lock.release()
         if evaluate:
-            score = self.evaluate_step(result=design, input_design=input_design, is_target=is_target)
+            score, score_parts = self.evaluate_step(result=design, input_design=input_design, is_target=is_target)
             if save_structure:
                 if isinstance(save_structure, bool):
                     save_structure = "evaluated_structure.pdb"
                 design.save_pdb(self.out_dir/save_structure)
-            return design, score
+            return design, score, score_parts
 
         if save_structure:
             if isinstance(save_structure, bool):
@@ -581,7 +581,7 @@ class ADAPT:
         return_input:bool=False,
         templates:bool=True,
         num_samples:int|None=None
-        )->List[DesignData]|Tuple[List[DesignData]|DesignData, float]|DesignData|Tuple[List[DesignData]|DesignData, JoltzInput]:
+        )->List[DesignData]|Tuple[List[DesignData]|DesignData, float, Tuple[float]]|DesignData|Tuple[List[DesignData]|DesignData, JoltzInput]:
         '''
         Predict protein structure using Boltz-2.
         Returns:
@@ -671,8 +671,8 @@ class ADAPT:
         if evaluate:
             if len(out)>1:
                 print("WARNING: evaluate_step currently only accepts one sample!")
-            score = self.evaluate_step(result=out[0], input_design=input_design, is_target=is_target)
-            return out, score
+            score, score_parts = self.evaluate_step(result=out[0], input_design=input_design, is_target=is_target)
+            return out, score, score_parts
 
         if return_input:
             return out, boltz_input
@@ -727,14 +727,14 @@ class ADAPT:
         input_design:DesignData,
         is_target:np.ndarray,
         scale_ipae:bool=True
-        ) -> float:
+        ) -> Tuple[float, Tuple[float]]:
         '''
         Calculate score for protein design.
         '''
         cdr3_rmsd = self.cdr3_rmsd(
             result=result, input_design=input_design, is_target=is_target)
         ipae = self.ipae(result=result, scale_ipae=scale_ipae)
-        return 2*ipae+0.5*cdr3_rmsd
+        return 2*ipae+0.5*cdr3_rmsd, (ipae, cdr3_rmsd)
 
 
     def ipae(
@@ -847,13 +847,13 @@ class ADAPT:
         for n,design in enumerate(designs):
             # redocking + evaluation step
             if self.boltz_redocking:
-                design, score = self.boltz_docking_step(
+                design, score, score_parts = self.boltz_docking_step(
                     input_design=design,
                     evaluate=True,
                     template=list(templates)[0]
                 )
             else:
-                design, score = self.af_docking_step(
+                design, score, score_parts = self.af_docking_step(
                     input_design=design,
                     evaluate=True,
                     is_target=target_mask,
@@ -871,6 +871,7 @@ class ADAPT:
         row = {"score": score, "scaffold": scaffold_name, "time":datetime.now().strftime("%Y-%d-%b_%H:%M:%S"),
             "tcr_chain_index":(*[int(i) for i in self.tcr_chain_index],),"mhc_chain_index":(*[int(i) for i in self.mhc_chain_index],),
             "mhc_class":int(self.mhc_class),
+            "score_parts":score_parts,
             **{cdr:self.get_cdr_seq(design, cdr) for cdr in self.imgt_mapper.keys()},
             **{f"{k}_coords":v for k, v in self.cdr_coords.items()},
             "out_time":None,
@@ -1007,13 +1008,13 @@ class ADAPT:
 
             # redocking + evaluation step
             if self.boltz_redocking:
-                design, score = self.boltz_docking_step(
+                design, score, score_parts = self.boltz_docking_step(
                     input_design=design,
                     evaluate=True,
                     is_target=target_mask,
                 )
             else:
-                design, score = self.af_docking_step(
+                design, score, score_parts = self.af_docking_step(
                     input_design=design,
                     evaluate=True,
                     is_target=target_mask,
@@ -1030,6 +1031,7 @@ class ADAPT:
         row = {"score": score, "scaffold": scaffold_name, "time":datetime.now().strftime("%Y-%d-%b_%H:%M:%S"),
             "tcr_chain_index":(*[int(i) for i in self.tcr_chain_index],),"mhc_chain_index":(*[int(i) for i in self.mhc_chain_index],),
             "mhc_class":int(self.mhc_class),
+            "score_parts":score_parts,
             **{cdr:self.get_cdr_seq(scaffold, cdr) for cdr in self.imgt_mapper.keys()},
             **{f"{k}_coords":v for k, v in self.cdr_coords.items()},
             "out_time":None,
@@ -1529,7 +1531,8 @@ class ADAPT:
                     scaffold,
                     return_input=False,
                     templates=False,
-                    num_samples=1
+                    num_samples=1,
+                    evaluate=False,
                 )[0]
         self.set_templates = False
         return scaffold, scaffold_name
