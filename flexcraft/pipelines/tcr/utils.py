@@ -51,8 +51,9 @@ def print_dd(dd, name:str="", keys:list=["aa"]):
         print("Key not found")
 
 
-def clean_chothia(file)->Path:
-    '''Removes annotations, duplicate chains and HETATMs.'''
+def clean_chothia(file, filter=("MODEL", "ENDMDL"))->Path:
+    '''Removes annotations, duplicate chains (and HETATMs with filter=("HETATM","MODEL", "ENDMDL")). '''
+
     if isinstance(file, str):
         file = Path(file)
     if file.name.endswith("_clean.pdb"):
@@ -66,7 +67,7 @@ def clean_chothia(file)->Path:
                 l = rf.readline()
                 if l.startswith("ATOM"):
                     wf.write(l[:26]+" "+l[27:])
-                elif not l.startswith(("HETATM", "MODEL", "ENDMDL")):
+                elif not l.startswith(filter):
                     wf.write(l)
     return out_path
 
@@ -258,6 +259,11 @@ def number_anarci(
         # Pass only this chain's sequence to anarci
         chain_aa = np.array(input_design["aa"])[chain_mask]
         seq = decode(chain_aa, code=code)
+        try:
+            anarci.validate_sequence(seq)
+        except AssertionError:
+            print(f"chain {chain} not valid!")
+            continue
         numbering = anarci.number(sequence=seq, scheme=scheme)
         if numbering[0]:
             chain_type = numbering[-1]

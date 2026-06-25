@@ -1,4 +1,5 @@
 #! /usr/bin/bash
+# RUN with mutated Peptide
 CONDA_PATH="miniforge3"             # path to miniforge or ... relative to project dir
 CONDA_ENV="flexcraft"               # e.g. flexcraft
 PROJECT_NAME="hai_1252"             # project id on cluster
@@ -8,15 +9,16 @@ PROJECT_DIR="$PROJECT"   # absolute path on cluster
 # deprecated for prepared, as sampling from same pool, duplicates designs
 N_RUNS=1
 current_time=$(date +"%Y-%m-%d_%H:%M:%S")
+current_time="2026-06-22_09:03:39"
 
 root="${PROJECT_DIR}/toulouse1/flexcraft"
 echo "root: ${root}"
 config_dir="${root}/tests/run_configs"
-out_parent="${root}/data/adapt/full_run"
+out_parent="${root}/data/adapt/full_run_mut"
 mkdir "${out_parent}"
 
 adapt_config="${config_dir}/adapt_config_0.json"
-run_config="${config_dir}/run_config_jw.sh"
+run_config="${config_dir}/run_config_jw_mut.sh"
 tmp_config="${config_dir}/run_config_jw_temp.sh"
 rm $tmp_config
 cp $run_config $tmp_config
@@ -60,7 +62,7 @@ source "$CONDA_PATH/bin/activate"
 conda activate "$CONDA_ENV"
 
 cd ${root}
-./flexcraft/pipelines/tcr/adapt/full_run_jw.sh $construct_config $tmp_config
+SEED=0 ./flexcraft/pipelines/tcr/adapt/full_run_jw.sh $construct_config $tmp_config
 EOF
 # wait till job finished
 sleep 10
@@ -111,7 +113,7 @@ conda activate "$CONDA_ENV"
 cd ${root}
 
 
-./flexcraft/pipelines/tcr/adapt/full_run_jw.sh $adapt_config $tmp_config
+SEED=$i ./flexcraft/pipelines/tcr/adapt/full_run_jw.sh $adapt_config $tmp_config
 EOF
 # reduce concurrent reading by 10s offset
 sleep 10

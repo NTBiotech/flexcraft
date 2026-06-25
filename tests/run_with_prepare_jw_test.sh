@@ -12,11 +12,11 @@ current_time=$(date +"%Y-%m-%d_%H:%M:%S")
 root="${PROJECT_DIR}/toulouse1/flexcraft"
 echo "root: ${root}"
 config_dir="${root}/tests/run_configs"
-out_parent="${root}/data/adapt/full_run"
+out_parent="${root}/data/adapt/full_run_test"
 mkdir "${out_parent}"
 
-adapt_config="${config_dir}/adapt_config_0.json"
-run_config="${config_dir}/run_config_jw.sh"
+adapt_config="${config_dir}/adapt_config_4.json"
+run_config="${config_dir}/run_config_jw_test.sh"
 tmp_config="${config_dir}/run_config_jw_temp.sh"
 rm $tmp_config
 cp $run_config $tmp_config
@@ -60,7 +60,7 @@ source "$CONDA_PATH/bin/activate"
 conda activate "$CONDA_ENV"
 
 cd ${root}
-./flexcraft/pipelines/tcr/adapt/full_run_jw.sh $construct_config $tmp_config
+SEED=0 ./flexcraft/pipelines/tcr/adapt/full_run_jw.sh $construct_config $tmp_config
 EOF
 # wait till job finished
 sleep 10
@@ -75,14 +75,14 @@ BINDERS=${prepared_dir}
 PREPARED=True
 PREPARE=False
 N_DESIGN=1
-OUT_DIR="${out_parent}/${current_time}_adapt_full_run_c0"
+OUT_DIR="${out_parent}/${current_time}_adapt_full_run"
 EOF
 
 for i in $(seq 1 $N_RUNS); do
 sbatch <<EOF
 #! /usr/bin/bash
 #SBATCH --job-name=${current_time}_adapt_run_${i}
-#SBATCH --time=10:00:00
+#SBATCH --time=1:00:00
 #SBATCH --account=${PROJECT_NAME}
 # budget account where contingent is taken from
 #SBATCH --nodes=1
@@ -111,7 +111,7 @@ conda activate "$CONDA_ENV"
 cd ${root}
 
 
-./flexcraft/pipelines/tcr/adapt/full_run_jw.sh $adapt_config $tmp_config
+SEED=$i ./flexcraft/pipelines/tcr/adapt/full_run_jw.sh $adapt_config $tmp_config
 EOF
 # reduce concurrent reading by 10s offset
 sleep 10

@@ -16,6 +16,7 @@ parser.add_argument("--refine_steps", type=int, default=100)
 parser.add_argument("--cdrs", nargs="*")
 parser.add_argument("--family_limit", type=int, default=10)
 parser.add_argument("--full_limit", type=int, default=100)
+parser.add_argument("--seed", type=int, default=None)
 
 parser.add_argument("--config", default="./config.json",)
 
@@ -29,6 +30,11 @@ out_dir = args.designed_dir
 if not (out_dir/"scores.csv").exists():
     raise FileNotFoundError(f"No scores.csv in designed_dir {out_dir}!")
 config.update(out_dir=out_dir)
+
+np.random.seed(args.seed)
+if not args.seed is None:
+    config.update(key=args.seed)
+
 adapt = ADAPT(
 **config
 )

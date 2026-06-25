@@ -180,6 +180,7 @@ class ADAPT:
         
         self.key = key
         if isinstance(self.key, int):
+            np.random.seed(self.key)
             self.key = Keygen(self.key)
         
         self.setup_pmpnn(
@@ -1293,6 +1294,7 @@ class ADAPT:
         # Attempt to Update residue index with IMGT numbering for the modified chain TODO: still needed?
         if use_imgt_mapper:
             out = self.number_anarci(out, chains=(chain_index,), trim=False)
+            total_offset=0
         else:
             # correct self.cdr_coords
             offsets = {
@@ -1351,6 +1353,13 @@ class ADAPT:
             # Pass only this chain's sequence to anarci
             chain_aa = np.array(input_design["aa"])[chain_mask]
             seq = decode(chain_aa, code=code)
+            # replace unknown X with G for numbering
+            seq = seq.replace("X", "G")
+            try:
+                anarci.validate_sequence(seq)
+            except AssertionError as err:
+                print(f"chain {chain} with seq {seq} not valid! Reason: {err}")
+                continue
             numbering = anarci.number(sequence=seq, scheme=scheme)
             if numbering[0]:
                 print(f"Classified chain {chain} as {numbering[-1]}.")

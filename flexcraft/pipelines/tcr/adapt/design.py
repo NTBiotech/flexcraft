@@ -41,9 +41,10 @@ parser.add_argument("--templates", nargs="*", default=None,
         Also set --template_mhc_class when using this feature. Overwrites config templates!")
 parser.add_argument("--template_mhc_class", nargs="*", default=None,
     help="Add MHC class of templates. If one element, is broadcasted to all templates.")
-parser.add_argument("--mhc_class", type=int, default=None)
+parser.add_argument("--mhc_class", type=int, default=None, help="MHC class of the provided scaffold MHC.")
+parser.add_argument("--seed", type=int, default=None)
 
-parser.add_argument("--config", default="./config.json",)
+parser.add_argument("--config", default="./config.json", help="ADAPT config file (.json). default: ./config.json")
 
 parser.add_argument("--prepared", type=_bool, help="Wether input binders are prepared or need to be constructed.")
 parser.add_argument("--prepare_only", type=_bool, help="If True, only scaffolds are prepared in out_dir.")
@@ -81,9 +82,12 @@ peptides = _expand(peptides, longest)
 
 
 # cdr generator
+np.random.seed(args.seed)
 cdrs_gen = cdr_parser(args.cdrs, random=args.random_cdr, cdr_length=args.cdr_length, patience=100)
 
-# update config 
+# update config
+if not args.seed is None:
+    config.update(key=args.seed)
 if not args.mhc_class is None:
     config.update(mhc_class = args.mhc_class)
 if not args.out_dir == Path(".") or "out_dir" not in config.keys():

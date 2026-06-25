@@ -132,10 +132,10 @@ for slice in $(seq 0 $binders_per_task $(($n_binders-1))); do
     echo "assigning slice ${slice} to GPU ${gpu}"
     
     if [ "$TYPE" = "ab" ]; then
-    CUDA_VISIBLE_DEVICES=$gpu python ./flexcraft/pipelines/tcr/adapt/design.py --config $ADAPT_CONFIG --peptide $PEPTIDE --mhc_allele $MHC_ALLELE --binder $binders --cdrs $CDR_FILE --ab --out_dir $OUT_DIR --random_cdr --design_steps $N_DESIGN --prepared $PREPARED --prepare_only $PREPARE&
+    CUDA_VISIBLE_DEVICES=$gpu python ./flexcraft/pipelines/tcr/adapt/design.py --config $ADAPT_CONFIG --peptide $PEPTIDE --mhc_allele $MHC_ALLELE --binder $binders --cdrs $CDR_FILE --ab --out_dir $OUT_DIR --random_cdr --design_steps $N_DESIGN --prepared $PREPARED --prepare_only $PREPARE --seed $SEED&
     fi
     if [ "$TYPE" = "tcr" ]; then
-    CUDA_VISIBLE_DEVICES=$gpu python ./flexcraft/pipelines/tcr/adapt/design.py --config $ADAPT_CONFIG --peptide $PEPTIDE --mhc_allele $MHC_ALLELE --binder $binders --cdrs $CDR_FILE --out_dir $OUT_DIR --random_cdr --design_steps $N_DESIGN --prepared $PREPARED --prepare_only $PREPARE&
+    CUDA_VISIBLE_DEVICES=$gpu python ./flexcraft/pipelines/tcr/adapt/design.py --config $ADAPT_CONFIG --peptide $PEPTIDE --mhc_allele $MHC_ALLELE --binder $binders --cdrs $CDR_FILE --out_dir $OUT_DIR --random_cdr --design_steps $N_DESIGN --prepared $PREPARED --prepare_only $PREPARE --seed $SEED&
     fi
     pids+=("$!")
     i=$(( i + 1 ))
@@ -156,7 +156,7 @@ echo "refinements per task: ${refine_per_task}"
 for n in $(seq $N_TASKS); do
     echo "Refine task ${n}..."
     gpu=$(( i % N_GPUS ))
-    CUDA_VISIBLE_DEVICES=$gpu python ./flexcraft/pipelines/tcr/adapt/refine.py --designed_dir $OUT_DIR --refine_steps $refine_per_task --cdrs acdr3 bcdr3  --config $ADAPT_CONFIG --family_limit $FAMILY_LIMIT --full_limit $FULL_LIMIT &
+    CUDA_VISIBLE_DEVICES=$gpu python ./flexcraft/pipelines/tcr/adapt/refine.py --designed_dir $OUT_DIR --refine_steps $refine_per_task --cdrs acdr3 bcdr3  --config $ADAPT_CONFIG --family_limit $FAMILY_LIMIT --full_limit $FULL_LIMIT --seed $SEED&
     pids+=("$!")
     i=$(( i + 1 ))
 done
