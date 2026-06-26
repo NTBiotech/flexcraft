@@ -5,7 +5,7 @@ PROJECT_NAME="hai_1252"             # project id on cluster
 REPO_NAME="flexcraft"
 jutil env activate -p "$PROJECT_NAME"
 PROJECT_DIR="$PROJECT"   # absolute path on cluster
-CONC_LIMIT=4
+CONC_LIMIT=3
 
 root="${PROJECT_DIR}/toulouse1/flexcraft"
 echo "root: ${root}"
@@ -23,6 +23,7 @@ prepared_dir="${out_parent}/adapt_tuning_prepared"
 cat <<EOF >>$tmp_config
 PREPARE=True
 PREPARED=False
+SEED=0
 EOF
 
 cat <<EOF
@@ -59,10 +60,10 @@ OUT_DIR=${prepared_dir} ./flexcraft/pipelines/tcr/adapt/full_run_jw.sh $construc
 EOF
 
 # wait till job finished
-#while (($(squeue|grep toulouse|wc -l) >= 1))
-#do
-#sleep 10
-#done
+while (($(squeue|grep toulouse|wc -l) >= 1)) #TODO: FIX to 1!
+do
+sleep 10
+done
 
 # overwrite BINDERS in run_config to prepared dir
 cat <<EOF >> $tmp_config
