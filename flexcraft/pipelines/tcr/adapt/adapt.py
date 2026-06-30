@@ -1436,7 +1436,7 @@ class ADAPT:
             return peptide
 
         elif isinstance(peptide, Path):
-            lock = FileLock(peptide.__str__()+".lock")
+            lock = FileLock(peptide.with_suffix(".lock"))
             with lock:
                 peptide = clean_chothia(peptide)
                 if not peptide.suffix in [".pdb", ".cif"]:

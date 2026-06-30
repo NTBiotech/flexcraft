@@ -9,38 +9,32 @@ O
 In model 1, Residue (A VAL 105) is not connected.
 C 
 CA 
-CB 
 N 
 O 
 
-In model 1, Residue (A ALA 106) is not connected.
+In model 1, Residue (A GLY 106) is not connected.
 C 
 CA 
 CB 
+CG1 
 CG2 
 N 
 O 
-OG1 
 
-In model 1, Residue (A THR 107) is not connected.
+In model 1, Residue (A VAL 107) is not connected.
 C 
 CA 
 CB 
 CD 
 CG 
+CZ 
 N 
-O 
-OE1 
-OE2 
-
-In model 1, Residue (A GLU 108) is not connected.
-C 
-CA 
-CB 
-N 
+NE 
+NH1 
+NH2 
 O 
 
-In model 1, Residue (A ALA 109) is not connected.
+In model 1, Residue (A ARG 108) is not connected.
 C 
 CA 
 CB 
@@ -49,7 +43,27 @@ CG
 N 
 O 
 
-In model 1, Residue (A PRO 110) is not connected.
+In model 1, Residue (A PRO 109) is not connected.
+C 
+CA 
+N 
+O 
+
+In model 1, Residue (A GLY 110) is not connected.
+C 
+CA 
+CB 
+N 
+O 
+OG 
+
+In model 1, Residue (A SER 111) is not connected.
+C 
+CA 
+N 
+O 
+
+In model 1, Residue (A GLY 112) is not connected.
 C 
 CA 
 CB 
@@ -59,7 +73,7 @@ CG2
 N 
 O 
 
-In model 1, Residue (A ILE 111) is not connected.
+In model 1, Residue (A ILE 113) is not connected.
 C 
 CA 
 CB 
@@ -71,71 +85,36 @@ CG
 CZ 
 N 
 O 
-OH 
 
-In model 1, Residue (A TYR 112) is not connected.
+In model 1, Residue (A PHE 114) is not connected.
 C 
 CA 
 CB 
-CD2 
-CE1 
-CG 
+CD1 
+CG1 
+CG2 
 N 
-ND1 
-NE2 
 O 
 
-In model 1, Residue (A HIS 112) is not connected.
+In model 1, Residue (A ILE 115) is not connected.
+C 
+CA 
+CB 
+N 
+O 
+
+In model 1, Residue (A ALA 116) is not connected.
 C 
 CA 
 CB 
 CD 
 CG 
 N 
-O 
-
-In model 1, Residue (A PRO 113) is not connected.
-C 
-CA 
-CB 
-CD 
-CG 
-N 
-NE2 
 O 
 OE1 
+OE2 
 
-In model 1, Residue (A GLN 114) is not connected.
-C 
-CA 
-CB 
-CD 
-CG 
-CZ 
-N 
-NE 
-NH1 
-NH2 
-O 
-
-In model 1, Residue (A ARG 115) is not connected.
-C 
-CA 
-CB 
-CG 
-N 
-O 
-OD1 
-OD2 
-
-In model 1, Residue (A ASP 116) is not connected.
-C 
-CA 
-CB 
-N 
-O 
-
-In model 1, Residue (B ALA 105) is not connected.
+In model 1, Residue (B GLU 105) is not connected.
 C 
 CA 
 CB 
@@ -146,17 +125,10 @@ OG
 In model 1, Residue (B SER 106) is not connected.
 C 
 CA 
-CB 
-CD 
-CG 
-CZ 
 N 
-NE 
-NH1 
-NH2 
 O 
 
-In model 1, Residue (B ARG 107) is not connected.
+In model 1, Residue (B GLY 107) is not connected.
 C 
 CA 
 CB 
@@ -173,11 +145,25 @@ In model 1, Residue (B GLY 109) is not connected.
 C 
 CA 
 CB 
+CD 
+CG 
 N 
 O 
-OG 
 
-In model 1, Residue (B SER 110) is not connected.
+In model 1, Residue (B PRO 110) is not connected.
+C 
+CA 
+CB 
+N 
+O 
+
+In model 1, Residue (B ALA 111) is not connected.
+C 
+CA 
+N 
+O 
+
+In model 1, Residue (B GLY 111) is not connected.
 C 
 CA 
 CB 
@@ -194,42 +180,54 @@ In model 1, Residue (B ARG 112) is not connected.
 C 
 CA 
 CB 
+N 
+O 
+
+In model 1, Residue (B ALA 112) is not connected.
+C 
+CA 
+N 
+O 
+
+In model 1, Residue (B GLY 112) is not connected.
+C 
+CA 
+CB 
+CD1 
+CD2 
+CG 
+N 
+O 
+
+In model 1, Residue (B LEU 113) is not connected.
+C 
+CA 
+CB 
+CD 
+CG 
+N 
+NE2 
+O 
+OE1 
+
+In model 1, Residue (B GLN 114) is not connected.
+C 
+CA 
+CB 
 CG2 
 N 
 O 
 OG1 
 
-In model 1, Residue (B THR 113) is not connected.
+In model 1, Residue (B THR 115) is not connected.
 C 
 CA 
 CB 
-CG 
-N 
-O 
-OD1 
-OD2 
-
-In model 1, Residue (B ASP 114) is not connected.
-C 
-CA 
-CB 
-CD 
+CD1 
+CD2 
 CG 
 N 
 O 
 
-In model 1, Residue (B PRO 115) is not connected.
-C 
-CA 
-CB 
-CD 
-CG 
-CZ 
-N 
-NE 
-NH1 
-NH2 
-O 
-
-In model 1, Residue (B ARG 116) is not connected.
+In model 1, Residue (B LEU 116) is not connected.
 Finished!

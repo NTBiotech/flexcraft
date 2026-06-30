@@ -22,11 +22,3 @@ SEED=42
 
 
 
-PREPARE=True
-PREPARED=False
-OUT_DIR=/p/project1/hai_1252/toulouse1/flexcraft/data/adapt/full_run/2026-06-28_12:18:30_adapt_full_run_prepared
-BINDERS=/p/project1/hai_1252/toulouse1/flexcraft/data/adapt/full_run/2026-06-28_12:18:30_adapt_full_run_prepared
-PREPARED=True
-PREPARE=False
-N_DESIGN=1
-OUT_DIR="/p/project1/hai_1252/toulouse1/flexcraft/data/adapt/full_run/2026-06-28_12:18:30_adapt_full_run_c4"

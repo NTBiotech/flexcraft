@@ -8,7 +8,7 @@ PROJECT_DIR="$PROJECT"   # absolute path on cluster
 # deprecated for prepared, as sampling from same pool, duplicates designs
 N_RUNS=3
 current_time=$(date +"%Y-%m-%d_%H:%M:%S")
-current_time="2026-06-22_09:03:39"
+current_time=2026-06-27_10:57:16
 
 root="${PROJECT_DIR}/toulouse1/flexcraft"
 echo "root: ${root}"
@@ -16,7 +16,7 @@ config_dir="${root}/tests/run_configs"
 out_parent="${root}/data/adapt/full_run_seed"
 mkdir "${out_parent}"
 
-adapt_config="${config_dir}/adapt_config_0.json"
+adapt_config="${config_dir}/adapt_config_4.json"
 run_config="${config_dir}/run_config_jw.sh"
 tmp_config="${config_dir}/run_config_jw_temp.sh"
 rm $tmp_config
@@ -32,7 +32,7 @@ PREPARED=False
 OUT_DIR=${prepared_dir}
 EOF
 
-sbatch <<EOF
+cat <<EOF
 #! /usr/bin/bash
 #SBATCH --job-name=prepare_adapt_tuning_${current_time}
 #SBATCH --time=02:00:00
@@ -77,10 +77,13 @@ BINDERS=${prepared_dir}
 PREPARED=True
 PREPARE=False
 N_DESIGN=1
-OUT_DIR="${out_parent}/${current_time}_adapt_full_run_c0"
+OUT_DIR="${out_parent}/${current_time}_adapt_full_run_c4"
 EOF
 
 for i in $(seq 1 $N_RUNS); do
+cat <<EOF >>$tmp_config
+OUT_DIR="${out_parent}/${current_time}_adapt_full_run_c4_$i"
+EOF
 sbatch <<EOF
 #! /usr/bin/bash
 #SBATCH --job-name=${current_time}_adapt_run_${i}
@@ -116,7 +119,7 @@ cd ${root}
 SEED=$i ./flexcraft/pipelines/tcr/adapt/full_run_jw.sh $adapt_config $tmp_config
 EOF
 # reduce concurrent reading by 10s offset
-sleep 10
+sleep 60
 
 done
 

@@ -28,11 +28,16 @@ conda activate "$CONDA_ENV"
 
 cd "${REPO_NAME}"
 
-directory=/p/project1/hai_1252/toulouse1/flexcraft/data/adapt
+directory=/p/project1/hai_1252/toulouse1/flexcraft/data/adapt/full_run
+#directory=/p/project1/hai_1252/toulouse1/flexcraft/data/adapt
+
 
 pids=()
 
-for d in "${directory}"/adapt_tuning_adapt_config_*; do
+#for d in "${directory}"/2026-06-22_09:03:39_adapt_full_run*; do
+#for d in "${directory}"/adapt_tuning_adapt_config_*; do
+for d in "${directory}"/2026-06-28_12:18:30_adapt_full_run_c*; do
+
 if [ -d "$d" ]; then
 if (( ${#pids[@]} >= $CONC_LIMIT )); then
 for pid in ${pids[*]}; do
@@ -49,7 +54,10 @@ import pandas as pd
 import numpy as np
 from flexcraft.pipelines.tcr.utils import pad_design
 
-files = [f for f in Path("$d").glob("*.pdb")]
+scores = pd.read_csv(Path("$d")/"scores.csv", index_col=0)
+pool = scores.loc[scores["in_pool"]].index
+
+files = [f.__str__() for f in Path("$d").glob("*.pdb") if f.name in pool]
 out_array = pd.DataFrame(columns=files, index=files)
 rmsd = RMSD()
 def get_rmsd(file1, file2):
@@ -60,12 +68,24 @@ def get_rmsd(file1, file2):
     mask = min([mask1,mask2], key=sum)
     return rmsd(design1, design2, mask=mask)
 
-for n1, f1 in enumerate(files):
-    for n2, f2 in enumerate(files):
-        print([f1,f2], sep="->\n")
-        out_array.loc[f1,f2]=get_rmsd(f1,f2)
-print("saving to ",Path("$d")/"rmsd_new.csv")
-out_array.to_csv(Path("$d")/"rmsd_new.csv")
+
+out_file = Path("$d")/"rmsd_new.csv"
+out_file.unlink(missing_ok=True)
+with open(out_file, "w") as af:
+    af.write(",".join([""]+files))
+    for n1, f1 in enumerate(files):
+        print(f"\n{f1}:\n")
+        #line=list()
+        af.write(f"\n{f1}")
+        for n2, f2 in enumerate(files):
+            _rmsd=get_rmsd(f1,f2)
+            print(f2,_rmsd, sep="->\n")
+            af.write(f",{_rmsd}")
+        #line = ",".join([f1]+line)
+        #af.write(line+"\n")
+    af.flush()
+#print("saving to ",out_file)
+#out_array.to_csv(out_file)
 EOF
 
 pids+=("$!")

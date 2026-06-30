@@ -12,12 +12,12 @@ current_time=$(date +"%Y-%m-%d_%H:%M:%S")
 root="${PROJECT_DIR}/toulouse1/flexcraft"
 echo "root: ${root}"
 config_dir="${root}/tests/run_configs"
-out_parent="${root}/data/adapt/full_run"
+out_parent="${root}/data/adapt/full_run_alt"
 mkdir "${out_parent}"
 
-adapt_config="${config_dir}/adapt_config_0.json"
-run_config="${config_dir}/run_config_jw.sh"
-tmp_config="${config_dir}/run_config_jw_temp.sh"
+adapt_config="${config_dir}/adapt_config_4.json"
+run_config="${config_dir}/run_config_jw_alt.sh"
+tmp_config="${config_dir}/run_config_jw_alt_temp.sh"
 rm $tmp_config
 cp $run_config $tmp_config
 
@@ -60,11 +60,11 @@ source "$CONDA_PATH/bin/activate"
 conda activate "$CONDA_ENV"
 
 cd ${root}
-./flexcraft/pipelines/tcr/adapt/full_run_jw.sh $construct_config $tmp_config
+SEED=9 ./flexcraft/pipelines/tcr/adapt/full_run_jw.sh $construct_config $tmp_config
 EOF
 # wait till job finished
 sleep 10
-while (($(squeue|grep toulouse|wc -l) >= 1))
+while (($(squeue|grep toulouse|wc -l) >= 2))
 do
 sleep 10
 done
@@ -75,7 +75,7 @@ BINDERS=${prepared_dir}
 PREPARED=True
 PREPARE=False
 N_DESIGN=1
-OUT_DIR="${out_parent}/${current_time}_adapt_full_run_c0"
+OUT_DIR="${out_parent}/${current_time}_adapt_full_run_c4"
 EOF
 
 for i in $(seq 1 $N_RUNS); do
@@ -111,7 +111,7 @@ conda activate "$CONDA_ENV"
 cd ${root}
 
 
-./flexcraft/pipelines/tcr/adapt/full_run_jw.sh $adapt_config $tmp_config
+SEED=$i ./flexcraft/pipelines/tcr/adapt/full_run_jw.sh $adapt_config $tmp_config
 EOF
 # reduce concurrent reading by 10s offset
 sleep 10

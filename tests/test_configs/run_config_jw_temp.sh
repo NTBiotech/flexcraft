@@ -24,6 +24,7 @@ CDR_FILE="./data/adapt/input_data/paired_human_cdr3s.tsv"
 
 PREPARE=True
 PREPARED=False
+SEED=0
 BINDERS=/p/project1/hai_1252/toulouse1/flexcraft/data/adapt/adapt_tuning_prepared
 PREPARED=True
 PREPARE=False
