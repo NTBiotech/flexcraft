@@ -8,14 +8,15 @@ PROJECT_DIR="$PROJECT"   # absolute path on cluster
 # deprecated for prepared, as sampling from same pool, duplicates designs
 N_RUNS=1
 current_time=$(date +"%Y-%m-%d_%H:%M:%S")
+current_time=2026-06-28_12:18:30
 
 root="${PROJECT_DIR}/toulouse1/flexcraft"
 echo "root: ${root}"
 config_dir="${root}/tests/run_configs"
-out_parent="${root}/data/adapt/full_run_alt"
+out_parent="${root}/data/adapt/full_run"
 mkdir "${out_parent}"
 
-adapt_config="${config_dir}/adapt_config_4.json"
+adapt_config="${config_dir}/adapt_config_5.json"
 run_config="${config_dir}/run_config_jw_alt.sh"
 tmp_config="${config_dir}/run_config_jw_alt_temp.sh"
 rm $tmp_config
@@ -30,7 +31,7 @@ PREPARE=True
 PREPARED=False
 OUT_DIR=${prepared_dir}
 EOF
-sbatch <<EOF
+cat <<EOF
 #! /usr/bin/bash
 #SBATCH --job-name=prepare_adapt_tuning_${current_time}
 #SBATCH --time=02:00:00
@@ -75,7 +76,7 @@ BINDERS=${prepared_dir}
 PREPARED=True
 PREPARE=False
 N_DESIGN=1
-OUT_DIR="${out_parent}/${current_time}_adapt_full_run_c4"
+OUT_DIR="${out_parent}/${current_time}_adapt_full_run_c5"
 EOF
 
 for i in $(seq 1 $N_RUNS); do

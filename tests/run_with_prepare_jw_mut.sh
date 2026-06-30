@@ -8,16 +8,17 @@ PROJECT_DIR="$PROJECT"   # absolute path on cluster
 # deprecated for prepared, as sampling from same pool, duplicates designs
 N_RUNS=1
 current_time=$(date +"%Y-%m-%d_%H:%M:%S")
+current_time=2026-06-30_12:41:50
 
 root="${PROJECT_DIR}/toulouse1/flexcraft"
 echo "root: ${root}"
 config_dir="${root}/tests/run_configs"
-out_parent="${root}/data/adapt/full_run_alt"
+out_parent="${root}/data/adapt/full_run_mut"
 mkdir "${out_parent}"
 
 adapt_config="${config_dir}/adapt_config_4.json"
-run_config="${config_dir}/run_config_jw_alt.sh"
-tmp_config="${config_dir}/run_config_jw_alt_temp.sh"
+run_config="${config_dir}/run_config_jw_mut.sh"
+tmp_config="${config_dir}/run_config_jw_mut_temp.sh"
 rm $tmp_config
 cp $run_config $tmp_config
 
@@ -30,7 +31,7 @@ PREPARE=True
 PREPARED=False
 OUT_DIR=${prepared_dir}
 EOF
-sbatch <<EOF
+cat <<EOF
 #! /usr/bin/bash
 #SBATCH --job-name=prepare_adapt_tuning_${current_time}
 #SBATCH --time=02:00:00
@@ -63,11 +64,11 @@ cd ${root}
 SEED=0 ./flexcraft/pipelines/tcr/adapt/full_run_jw.sh $construct_config $tmp_config
 EOF
 # wait till job finished
-sleep 10
-while (($(squeue|grep toulouse|wc -l) >= 1))
-do
-sleep 10
-done
+#sleep 10
+#while (($(squeue|grep toulouse|wc -l) >= 1))
+#do
+#sleep 10
+#done
 
 # overwrite BINDERS in run_config to prepared dir
 cat <<EOF >> $tmp_config

@@ -4,7 +4,7 @@
 # 
 N_TASKS=4
 N_REFINEMENT=100000 # just wait until job time over
-PEPTIDE="TLMSAMTNL"
+PEPTIDE="TLMSAMGNL"
 TYPE="tcr"
 #OUT_DIR="./data/adapt/tuning_run_${current_time}"
 WD="/p/home/jusers/toulouse1/juwels/project/toulouse1/flexcraft"
